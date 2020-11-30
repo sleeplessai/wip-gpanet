@@ -35,16 +35,11 @@ class _conv2d_norm_leaky_relu(nn.Module):
         self.norm = nn.BatchNorm2d(out_channels)
         self.relu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
 
-    def forward(self, x):
+    def forward(self, x, activate=True):
         x = self.conv(x)
         x = self.norm(x)
-        x = self.relu(x)
+        if activate: x = self.relu(x)
         return x
-
-
-class _dwconv2_norm_leaky_relu(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=False):
-        super(_dwconv2_norm_leaky_relu, self).__init__()
 
 
 class global_perception(nn.Module):
@@ -125,14 +120,14 @@ class se_gpm_block(nn.Module):
             x = self.se(x)
         elif self.se_design == 'identity':
             x = self.se(identity) + self.gpm(identity)
+        x = F.leaky_relu(x, negative_slope=0.1)
         return x
 
 
-class se_gpm2cls(nn.Module):
+class se_gpm2cls_v0(nn.Module):
     def __init__(self, resnet, in_channels=[512, 1024, 2048], reduce2=[64, 64, 64], gpm_n=[2, 2, 2], n_classes=0):
-        super(se_gpm2cls, self).__init__()
+        super(se_gpm2cls_v0, self).__init__()
         self.backbone = resnet
-
         self.scale = nn.ModuleList()
         self.se_gpm = nn.ModuleList()
         self.fc2cls = nn.ModuleList()
@@ -162,13 +157,13 @@ class se_gpm2cls(nn.Module):
 if __name__ == "__main__":
     device = torch.device('cuda:0')
     x = torch.rand(8, 3, 448, 448).cuda()
-    fg_model = se_gpm2cls(
+    fg_model = se_gpm2cls_v0(
         resnet=_resnet50(),
-        reduce2=[512, 512, 512],
+        reduce2=[1024, 1024, 1024],
         gpm_n=[4, 4, 2],
         n_classes=200
     ).cuda()
     y = fg_model(x)
 
-    torch.save(fg_model.state_dict(), 'se-gpm2cls_resnet50_3x512d.pth')
+    torch.save(fg_model.state_dict(), 'se-gpm2cls-v0_resnet50_3x512d.pth')
 
