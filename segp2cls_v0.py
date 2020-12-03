@@ -33,7 +33,7 @@ class _conv2d_norm_leaky_relu(nn.Module):
         super(_conv2d_norm_leaky_relu, self).__init__()
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, padding=padding, groups=groups, bias=bias)
         self.norm = nn.BatchNorm2d(out_channels)
-        self.relu = nn.LeakyReLU(negative_slope=0.1, inplace=True)
+        self.relu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
 
     def forward(self, x, activate=True):
         x = self.conv(x)
@@ -90,7 +90,7 @@ class se_block(nn.Module):
         )
 
     def forward(self, x):
-        b, c, h, w = x.size()
+        b, c, _, _  = x.size()
         y = self.avgpool(x).view(b, c)
         y = self.fc(y).view(b, c, 1, 1)
         return x * y.expand_as(x)
@@ -120,12 +120,12 @@ class se_gpm_block(nn.Module):
             x = self.se(x)
         elif self.se_design == 'identity':
             x = self.se(identity) + self.gpm(identity)
-        x = F.leaky_relu(x, negative_slope=0.1)
+        x = F.leaky_relu(x, negative_slope=0.2)
         return x
 
 
 class se_gpm2cls_v0(nn.Module):
-    def __init__(self, resnet, in_channels=[512, 1024, 2048], reduce2=[64, 64, 64], gpm_n=[2, 2, 2], n_classes=0):
+    def __init__(self, resnet, in_channels=[512, 1024, 2048], reduce2=[64, 64, 64], gpm_n=[2, 2, 2], se_design='se', n_classes=0):
         super(se_gpm2cls_v0, self).__init__()
         self.backbone = resnet
         self.scale = nn.ModuleList()
@@ -134,7 +134,7 @@ class se_gpm2cls_v0(nn.Module):
 
         for i in range(len(in_channels)):
             self.scale.append(_conv2d_norm_leaky_relu(in_channels[i], reduce2[i], 1))
-            self.se_gpm.append(se_gpm_block(reduce2[i], gpm_n[i]))
+            self.se_gpm.append(se_gpm_block(reduce2[i], gpm_n[i], se_design=se_design))
             self.fc2cls.append(nn.Linear(reduce2[i], n_classes, bias=False))
 
     def forward(self, x):
@@ -157,13 +157,13 @@ class se_gpm2cls_v0(nn.Module):
 if __name__ == "__main__":
     device = torch.device('cuda:0')
     x = torch.rand(8, 3, 448, 448).cuda()
-    fg_model = se_gpm2cls_v0(
+    model = se_gpm2cls_v0(
         resnet=_resnet50(),
-        reduce2=[1024, 1024, 1024],
+        reduce2=[512, 512, 512],
         gpm_n=[4, 4, 2],
         n_classes=200
     ).cuda()
-    y = fg_model(x)
+    y = model(x)
 
-    torch.save(fg_model.state_dict(), 'se-gpm2cls-v0_resnet50_3x512d.pth')
+    torch.save(model.state_dict(), 'se-gpm2cls-v0_resnet50_3x512d.pth')
 

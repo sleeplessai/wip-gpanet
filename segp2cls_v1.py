@@ -63,7 +63,7 @@ class _se_quarter_bottleneck(nn.Module):
 
         if not se_design:
             self.se = None
-        elif se_design in ['se', 'post']:
+        elif se_design in ['se', 'post']: #
             self.se = se_block(out_channels, se_reduction)
         elif se_design in ['pre', 'identity']:
             self.se = se_block(in_channels, se_reduction)
@@ -192,7 +192,8 @@ class se_gpm2cls_v1(nn.Module):
             y.append(itmd)
         z = y.pop(0)    # stage3
         for i in range(len(y)):
-            z = F.adaptive_max_pool2d(z, y[i].size()[-1])
+            # z = F.adaptive_max_pool2d(z, y[i].size()[-1])
+            # z = F.adaptive_avg_pool2d(z, y[i].size()[-1]) # chen
             y[i] = torch.cat((y[i], z), dim=1)
             y[i] = F.adaptive_avg_pool2d(y[i], 1)
             y[i] = torch.flatten(y[i], 1)
@@ -212,7 +213,7 @@ if __name__ == "__main__":
         resnet=_resnet50(),
         reduce2=[512, 1024, 1024],
         gpm_split_sz=[4, 4, 2],
-        se_design='identity',
+        se_design='se',
         n_classes=200
     ).to(device)
     y = fg_model(x)
