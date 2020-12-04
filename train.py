@@ -17,14 +17,15 @@ if __name__ == "__main__":
   device_id = 'cuda'
   epoch_cnt = 60
   expt = Experiment()
-  # default_cub200(expt, data_loc='/home/mlss/data/CUB_200_2011', loader=True)
-  # default_cars196(expt, data_loc='/home/mlss/data/cars196', loader=True)
-  default_aircraft(expt, data_loc='/home/mlss/data/fgvc-aircraft-2013b', trainval=True, loader=True)
+  default_cub200(expt, data_loc='/home/i28/data/CUB_200_2011', loader=True)
+  # default_cars196(expt, data_loc='/home/i28/data/cars196', loader=True)
+  # default_aircraft(expt, data_loc='/home/i28/data/fgvc-aircraft-2013b', trainval=True, loader=True)
+  # exit(0)   # uncomment this to check dataset
 
   from ablation import ABLATION_MODELS
   from segp2cls_v0 import _resnet50
 
-  model = ABLATION_MODELS['0c'](
+  model = ABLATION_MODELS['0d'](
     resnet=_resnet50(),
     n_classes=expt.category_cnt
   )
