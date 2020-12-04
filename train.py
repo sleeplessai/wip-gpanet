@@ -18,13 +18,13 @@ if __name__ == "__main__":
   epoch_cnt = 60
   expt = Experiment()
   # default_cub200(expt, data_loc='/home/mlss/data/CUB_200_2011', loader=True)
-  default_cars196(expt, data_loc='/home/mlss/data/cars196', loader=True)
-  # default_aircraft(expt, data_loc='/home/mlss/data/fgvc-aircraft-2013b', trainval=True, loader=True)
+  # default_cars196(expt, data_loc='/home/mlss/data/cars196', loader=True)
+  default_aircraft(expt, data_loc='/home/mlss/data/fgvc-aircraft-2013b', trainval=True, loader=True)
 
   from ablation import ABLATION_MODELS
   from segp2cls_v0 import _resnet50
 
-  model = ABLATION_MODELS['0b'](
+  model = ABLATION_MODELS['0c'](
     resnet=_resnet50(),
     n_classes=expt.category_cnt
   )
@@ -32,7 +32,7 @@ if __name__ == "__main__":
 
   # optimizer
   sgdm_lr = np.pi / np.e / 100.  # 0.0115~
-  sgdm_lrs = [sgdm_lr * .1, sgdm_lr, sgdm_lr]
+  sgdm_lrs = [sgdm_lr * .1, sgdm_lr, sgdm_lr, sgdm_lr, sgdm_lr]
   schd_t, schd_d, schd_r = 20, 10, .5
   # sgdm = optim.SGD(model.parameters(), lr=sgdm_lr, momentum=0.9, weight_decay=1e-4)
   sgdm = optim.SGD([
