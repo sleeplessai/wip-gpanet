@@ -6,6 +6,7 @@ import numpy as np
 
 from fireblast.experiment.default import Experiment
 from fireblast.experiment.default import default_cub200, default_cars196, default_aircraft
+from fireblast.experiment.default import default_dataloader
 from fireblast.experiment.loop import Loop
 from torch.utils.tensorboard import SummaryWriter
 
@@ -18,8 +19,11 @@ if __name__ == "__main__":
   epoch_cnt = 100
   expt = Experiment()
   default_cub200(expt, data_loc='/home/mlss/data/CUB_200_2011', loader=True)
-  # default_cars196(expt, data_loc='/home/mlss/data/cars196', loader=True)
-  # default_aircraft(expt, data_loc='/home/mlss/data/fgvc-aircraft-2013b', trainval=True, loader=True)
+  # default_cars196(expt, data_loc='/home/mlss/data/cars196', loader=False)
+  # default_aircraft(expt, data_loc='/home/mlss/data/fgvc-aircraft-2013b', trainval=True, loader=False)
+  # expt.trainset_loader = default_dataloader(expt.trainset, batch_size=12)
+  # expt.testset_loader = default_dataloader(expt.testset, batch_size=6, shuffle=False)
+
   # exit(0)   # uncomment this to check dataset
 
   # from ablation import ABLATION_MODELS
@@ -60,7 +64,9 @@ if __name__ == "__main__":
     # smry_wrt.add_scalars('Training/LR/epoch', {'backbone_lr': sgdm.param_groups[0]['lr'], 'module_lr':sgdm.param_groups[1]['lr']}, e)
     smry_wrt.add_scalar('Training/LR/epoch', sgdm.param_groups[0]['lr'], e)
 
+    model.training = True
     Loop.learn(expt, model, sgdm, schd, F.cross_entropy, 0, device_id, e, smry_wrt)
+    model.training = False
     _, accuracy = Loop.validate(expt, model, F.cross_entropy, 0, device_id, e, smry_wrt)
 
     # saving

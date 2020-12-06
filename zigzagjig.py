@@ -26,7 +26,7 @@ def jigsaw_generator(features, n):
 
 
 class zigzag(nn.Module):
-    def __init__(self, pretrained=True, class_cnt=0):
+    def __init__(self, pretrained=True, class_cnt=0, training=True):
         self._id = 'zigzagjig-0riginal'
         super(zigzag, self).__init__()
         self.net = resnet50(pretrained=True)
@@ -34,6 +34,7 @@ class zigzag(nn.Module):
         self.net.avgpool = None
         self.jiggen = jigsaw_generator
         self.fc = nn.Linear(2048, class_cnt, bias=False)
+        self.training = training
 
     def forward(self, x, feats=False):  # todo: partial_rate arg
         x = self.net.conv1(x)
@@ -44,24 +45,24 @@ class zigzag(nn.Module):
         # stage-2
         s2 = self.net.layer1(s1)
         # print(s2.size())
-        p1, p2 = torch.split(s2, s2.size(1)//2, dim=1)
-        # print(p1.size() == p2.size())
-        p1 = self.jiggen(p1, 8)
-        s2 = torch.cat((p1, p2), dim=1)
+        if self.training:
+            p1, p2 = torch.split(s2, s2.size(1)//2, dim=1)
+            p1 = self.jiggen(p1, 8)
+            s2 = torch.cat((p1, p2), dim=1)
         # stage-3
         s3 = self.net.layer2(s2)
         # print(s3.size())
-        p1, p2 = torch.split(s3, s3.size(1)//2, dim=1)
-        # print(p1.size() == p2.size())
-        p1 = self.jiggen(p1, 4)
-        s3 = torch.cat((p1, p2), dim=1)
+        if self.training:
+            p1, p2 = torch.split(s3, s3.size(1)//2, dim=1)
+            p1 = self.jiggen(p1, 4)
+            s3 = torch.cat((p1, p2), dim=1)
         # stage-4
         s4 = self.net.layer3(s3)
         # print(s4.size())
-        p1, p2 = torch.split(s4, s4.size(1)//2, dim=1)
-        # print(p1.size() == p2.size())
-        p1 = self.jiggen(p1, 2)
-        s4 = torch.cat((p1, p2), dim=1)
+        if self.training:
+            p1, p2 = torch.split(s4, s4.size(1)//2, dim=1)
+            p1 = self.jiggen(p1, 2)
+            s4 = torch.cat((p1, p2), dim=1)
         # stage-5
         s5 = self.net.layer4(s4)
         # avgpool, fc
@@ -76,10 +77,15 @@ class zigzag(nn.Module):
 
 if __name__ == "__main__":
     net = zigzag(class_cnt=200).cuda()
-    x = torch.rand((16, 3, 448, 448)).cuda()
+    x = torch.rand((12, 3, 448, 448)).cuda()
     import time
     t = time.time()
     # y, c = net(x)
+
+    net.training = True
+    y = net(x)
+    print(y.size())
+    net.training = False
     y = net(x)
     print(time.time() - t)
     print(y.size())
