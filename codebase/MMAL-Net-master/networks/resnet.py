@@ -207,15 +207,15 @@ class ResNet(nn.Module):
 
         conv5_b = self.layer4[:2](x)
         x = self.layer4[2](conv5_b)
-
-        fm = x
+        # rename according to eq(4) in paper
+        conv5_c = x
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
         x = self.dropout(x)
-        embeeding = x
+        embedding = x
 
 
-        return fm, embeeding, conv5_b
+        return conv5_c, embedding, conv5_b
 
 
 def _resnet(arch, block, layers, pretrained, pth_path, **kwargs):
