@@ -1,4 +1,7 @@
-from fireblast.models.resnet import resnet50
+# try:
+# from fireblast.models.resnet import resnet50
+# except:
+from torchvision.models import resnet50
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,10 +9,15 @@ from skimage import measure
 
 
 class _resnet50(nn.Module):
-    def __init__(self, pretrained=True):
+    def __init__(self, pretrained=True, pth_path=None):
         super(_resnet50, self).__init__()
-        self.net = resnet50(pretrained=True)
-        self.net.fc = None
+        if not pth_path:
+            self.net = resnet50(pretrained=True)
+        else:
+            print(f'Load weights from {pth_path}')
+            self.net = resnet50(pretrained=False)
+            self.net.fc = nn.Linear(2048, 200)
+            self.net.load_state_dict(torch.load(pth_path))
         self.dropout = nn.Dropout(p=0.5)
 
     def forward(self, x):
@@ -25,7 +33,7 @@ class _resnet50(nn.Module):
 
         return [x1, x2, x3, x4, x5]
 
-    def _alom_forward(self, x):
+    def _aolm_forward(self, x):
         x = self.net.conv1(x)
         x = self.net.bn1(x)
         x = self.net.relu(x)
@@ -52,17 +60,17 @@ class _resnet50(nn.Module):
         return conv5_c, conv5_b, embedding
 
 
-def attention_object_location_module(conv5_c, conv5_b):
+def attention_object_location_module(conv5_c, conv5_b, image_wh=448, stride=32):
     A = torch.sum(conv5_c, dim=1, keepdim=True)
     a = torch.mean(A, dim=[2, 3], keepdim=True)
-    Mask = (A > a).float()
+    mask_c = (A > a).float()
 
-    A1 = torch.sum(conv5_b, dim=1, keepdim=True)
-    a1 = torch.mean(A1, dim=[2, 3], keepdim=True)
-    Mask1 = (A1 > a1).float()
+    A_ = torch.sum(conv5_b, dim=1, keepdim=True)
+    a_ = torch.mean(A_, dim=[2, 3], keepdim=True)
+    mask_b = (A_ > a_).float()
 
     coordinates = []
-    for i, m in enumerate(Mask):
+    for i, m in enumerate(mask_c):
         mask_np = m.cpu().numpy().reshape(14, 14)
         component_labels = measure.label(mask_np)
 
@@ -72,15 +80,14 @@ def attention_object_location_module(conv5_c, conv5_b):
             areas.append(prop.area)
         max_idx = areas.index(max(areas))
 
-        intersection = ((component_labels==(max_idx+1)).astype(int) + (Mask1[i][0].cpu().numpy()==1).astype(int)) == 2
+        intersection = ((component_labels==(max_idx+1)).astype(int) + (mask_b[i][0].cpu().numpy()==1).astype(int)) == 2
         prop = measure.regionprops(intersection.astype(int))
         if len(prop) == 0:
-            bbox = [0, 0, 14, 14]
+            bbox = [0, 0, image_wh // stride, image_wh // stride]
             print('there is one img no intersection')
         else:
             bbox = prop[0].bbox
 
-        stride = 32
         x_lefttop = bbox[0] * stride - 1
         y_lefttop = bbox[1] * stride - 1
         x_rightlow = bbox[2] * stride - 1
@@ -97,11 +104,31 @@ def attention_object_location_module(conv5_c, conv5_b):
 
 
 if __name__ == "__main__":
-    net = _resnet50().cuda()
-    x = torch.rand((7, 3, 448, 448)).cuda()
-    # a, b, c = net._alom_forward(x)
-    # print(a.size(), b.size(), c.size())
-    a = torch.rand((1, 3, 14, 14)).cuda()
-    b = torch.rand((1, 3, 14, 14)).cuda()
-    coor = attention_object_location_module(a, b)
-    print(coor)
+
+    net = _resnet50(pth_path=r"saved/resnet50-CUB-200.pth").cuda()
+
+    # exit(0)
+    from PIL import Image
+    import cv2
+    from torchvision.transforms.functional import to_tensor, resize, to_pil_image, crop
+    import os
+
+    image_dir = 'cub'
+    for idx, im in enumerate([os.path.join(image_dir, p) for p in os.listdir(image_dir)]):
+        x = Image.open(im).convert('RGB')
+        x = torch.unsqueeze(to_tensor(resize(x, (448, 448))), dim=0).float().cuda()
+        if x.size(1) == 1: x = torch.cat((x, x, x), dim=1)
+        conv_c, conv_b, _ = net._aolm_forward(x)
+        ulx, uly, lrx, lry = attention_object_location_module(conv_c, conv_b)[0]
+        print(ulx, uly, lrx, lry, idx)
+
+        x = to_pil_image(torch.squeeze(x).cpu())
+        x = crop(x, ulx, uly, lrx - ulx, lry - uly)
+        # print(x.size())
+        w = lrx - ulx
+        h = lry - uly
+        ratio = w / h
+        # todo: keep ratio 384
+        x = resize(x, (w, h), interpolation=Image.ANTIALIAS)
+        x.save(f'cropped/cropped-{idx}.jpg')
+        # x.show()
