@@ -16,7 +16,7 @@ class _resnet50(nn.Module):
         else:
             print(f'Load weights from {pth_path}')
             self.net = resnet50(pretrained=False)
-            self.net.fc = nn.Linear(2048, 200)
+            self.net.fc = nn.Linear(2048, 200, bias=False)
             self.net.load_state_dict(torch.load(pth_path))
         self.dropout = nn.Dropout(p=0.5)
 
@@ -43,13 +43,10 @@ class _resnet50(nn.Module):
         x = self.net.layer2(x)
         x = self.net.layer3(x)
 
-        # print(x.size())
-        # print('layer4:', self.net.layer4.__len__())
-        # print(self.net.layer4[:2])
         conv5_b = self.net.layer4[:2](x)
         x = self.net.layer4[2](conv5_b)
-
         conv5_c = x
+
         x = self.net.avgpool(x)
         x = x.view(x.size(0), -1)
         x = self.dropout(x)
@@ -70,9 +67,9 @@ def attention_object_location_module(conv5_c, conv5_b, image_wh=448, stride=32):
     mask_b = (A_ > a_).float()
 
     coordinates = []
-    for i, m in enumerate(mask_c):
-        mask_np = m.cpu().numpy().reshape(14, 14)
-        component_labels = measure.label(mask_np)
+    for i, mask in enumerate(mask_c):
+        mask = mask.cpu().numpy().reshape(image_wh // stride, image_wh // stride)
+        component_labels = measure.label(mask)
 
         properties = measure.regionprops(component_labels)
         areas = []
@@ -80,7 +77,8 @@ def attention_object_location_module(conv5_c, conv5_b, image_wh=448, stride=32):
             areas.append(prop.area)
         max_idx = areas.index(max(areas))
 
-        intersection = ((component_labels==(max_idx+1)).astype(int) + (mask_b[i][0].cpu().numpy()==1).astype(int)) == 2
+        intersection = ((component_labels == (max_idx + 1)).astype(int) +
+                        (mask_b[i][0].cpu().numpy() == 1).astype(int)) == 2
         prop = measure.regionprops(intersection.astype(int))
         if len(prop) == 0:
             bbox = [0, 0, image_wh // stride, image_wh // stride]
@@ -88,17 +86,12 @@ def attention_object_location_module(conv5_c, conv5_b, image_wh=448, stride=32):
         else:
             bbox = prop[0].bbox
 
-        x_lefttop = bbox[0] * stride - 1
-        y_lefttop = bbox[1] * stride - 1
-        x_rightlow = bbox[2] * stride - 1
-        y_rightlow = bbox[3] * stride - 1
-        # for image
-        if x_lefttop < 0:
-            x_lefttop = 0
-        if y_lefttop < 0:
-            y_lefttop = 0
-        coordinate = [x_lefttop, y_lefttop, x_rightlow, y_rightlow]
-        coordinates.append(coordinate)
+        upperleft_x, upperleft_y = bbox[0] * stride - 1, bbox[1] * stride - 1
+        lowerright_x, lowerright_y = bbox[2] * stride - 1, bbox[3] * stride - 1
+        upperleft_x = 0 if upperleft_x < 0 else upperleft_x
+        upperleft_y = 0 if upperleft_y < 0 else upperleft_y
+
+        coordinates.append([upperleft_x, upperleft_y, lowerright_x, lowerright_y])
 
     return coordinates
 
@@ -107,28 +100,24 @@ if __name__ == "__main__":
 
     net = _resnet50(pth_path=r"saved/resnet50-CUB-200.pth").cuda()
 
-    # exit(0)
     from PIL import Image
-    import cv2
     from torchvision.transforms.functional import to_tensor, resize, to_pil_image, crop
     import os
 
     image_dir = 'cub'
-    for idx, im in enumerate([os.path.join(image_dir, p) for p in os.listdir(image_dir)]):
+    images = [os.path.join(image_dir, p) for p in os.listdir(image_dir)]
+    for idx, im in enumerate(images):
         x = Image.open(im).convert('RGB')
-        x = torch.unsqueeze(to_tensor(resize(x, (448, 448))), dim=0).float().cuda()
+        x = torch.unsqueeze(to_tensor(resize(x, (384, 384))), dim=0).float().cuda()
         if x.size(1) == 1: x = torch.cat((x, x, x), dim=1)
         conv_c, conv_b, _ = net._aolm_forward(x)
-        ulx, uly, lrx, lry = attention_object_location_module(conv_c, conv_b)[0]
-        print(ulx, uly, lrx, lry, idx)
-
+        ulx, uly, lrx, lry = attention_object_location_module(conv_c, conv_b, image_wh=384)[0]
+        # print(ulx, uly, lrx, lry, idx)
         x = to_pil_image(torch.squeeze(x).cpu())
         x = crop(x, ulx, uly, lrx - ulx, lry - uly)
         # print(x.size())
-        w = lrx - ulx
-        h = lry - uly
-        ratio = w / h
-        # todo: keep ratio 384
+        w, h = lrx - ulx, lry - uly
+        # todo: keep ratio
         x = resize(x, (w, h), interpolation=Image.ANTIALIAS)
         x.save(f'cropped/cropped-{idx}.jpg')
-        # x.show()
+        x.show()
