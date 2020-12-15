@@ -16,7 +16,7 @@ class _resnet50(nn.Module):
         else:
             print(f'Load weights from {pth_path}')
             self.net = resnet50(pretrained=False)
-            self.net.fc = nn.Linear(2048, 200, bias=False)
+            self.net.fc = nn.Linear(2048, 200)
             self.net.load_state_dict(torch.load(pth_path))
         self.dropout = nn.Dropout(p=0.5)
 
@@ -33,28 +33,40 @@ class _resnet50(nn.Module):
 
         return [x1, x2, x3, x4, x5]
 
-    def _aolm_forward(self, x):
+    def _aolm_forward(self, x, scda_stage=4):
+        scda = [None, None, None, None, None]
+
         x = self.net.conv1(x)
         x = self.net.bn1(x)
         x = self.net.relu(x)
-        x = self.net.maxpool(x)
+        x = self.net.maxpool(x)     # s1
 
-        x = self.net.layer1(x)
-        x = self.net.layer2(x)
-        x = self.net.layer3(x)
+        x = self.net.layer1(x)      # s2
+
+        conv3_b = self.net.layer2[:-1](x)
+        x = self.net.layer2[-1](conv3_b)
+        conv3_c = x
+        scda[2] = (conv3_c, conv3_b)    # s3
+
+        conv4_b = self.net.layer3[:-1](x)
+        x = self.net.layer3[-1](conv4_b)
+        conv4_c = x
+        scda[3] = (conv4_c, conv4_b)    # s4
 
         conv5_b = self.net.layer4[:2](x)
         x = self.net.layer4[2](conv5_b)
         conv5_c = x
+        scda[4] = (conv5_c, conv5_b)    # s5
 
         x = self.net.avgpool(x)
         x = x.view(x.size(0), -1)
         x = self.dropout(x)
         embedding = x
 
+        conv_c, conv_b = scda[scda_stage]
         # conv5_c from last conv layer, \
         # conv5_b is the one in front of conv5_c
-        return conv5_c, conv5_b, embedding
+        return conv_c, conv_b, embedding
 
 
 def attention_object_location_module(conv5_c, conv5_b, image_wh=448, stride=32):
@@ -105,19 +117,29 @@ if __name__ == "__main__":
     import os
 
     image_dir = 'cub'
+    crop_size = 448
+    focus_size = 448
     images = [os.path.join(image_dir, p) for p in os.listdir(image_dir)]
     for idx, im in enumerate(images):
         x = Image.open(im).convert('RGB')
-        x = torch.unsqueeze(to_tensor(resize(x, (384, 384))), dim=0).float().cuda()
+        x = torch.unsqueeze(to_tensor(resize(x, (crop_size, crop_size))), dim=0).float().cuda()
         if x.size(1) == 1: x = torch.cat((x, x, x), dim=1)
-        conv_c, conv_b, _ = net._aolm_forward(x)
-        ulx, uly, lrx, lry = attention_object_location_module(conv_c, conv_b, image_wh=384)[0]
-        # print(ulx, uly, lrx, lry, idx)
+        conv_c, conv_b, _ = net._aolm_forward(x, scda_stage=-1)
+        ulx, uly, lrx, lry = attention_object_location_module(conv_c, conv_b, image_wh=crop_size, stride=32)[0]
+        focus_w, focus_h = lrx - ulx, lry - uly
+        print(idx, ':', ulx, uly, lrx, lry)
         x = to_pil_image(torch.squeeze(x).cpu())
-        x = crop(x, ulx, uly, lrx - ulx, lry - uly)
-        # print(x.size())
-        w, h = lrx - ulx, lry - uly
-        # todo: keep ratio
-        x = resize(x, (w, h), interpolation=Image.ANTIALIAS)
-        x.save(f'cropped/cropped-{idx}.jpg')
+        x = crop(x, ulx, uly, focus_w, focus_h)
+        ratio = focus_w / focus_h
+        if ratio > 1.:
+            focus_w = focus_size
+            focus_h = int(focus_size / ratio)
+        elif ratio < 1.:
+            focus_h = focus_size
+            focus_w = int(focus_size * ratio)
+        else:
+            focus_w, focus_h = focus_size, focus_size
+        # print(round(ratio, 8), round(focus_w / focus_h, 8), ratio == focus_w / focus_h)
+        x = resize(x, (focus_w, focus_h), interpolation=Image.ANTIALIAS)
+        x.save(f'cropped/{idx}_.jpg')
         x.show()
