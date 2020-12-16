@@ -7,6 +7,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 from skimage import measure
 
+import time
+
+def timeit(method):
+    def timed(*args, **kw):
+        ts = time.time()
+        result = method(*args, **kw)
+        te = time.time()
+        if 'log_time' in kw:
+            name = kw.get('log_name', method.__name__.upper())
+            kw['log_time'][name] = int((te - ts) * 1000)
+        else:
+            print('%r  %2.2f ms' % (method.__name__, (te - ts) * 1000))
+        return result
+    return timed
+
 
 class _resnet50(nn.Module):
     def __init__(self, pretrained=True, pth_path=None):
@@ -16,7 +31,7 @@ class _resnet50(nn.Module):
         else:
             print(f'Load weights from {pth_path}')
             self.net = resnet50(pretrained=False)
-            self.net.fc = nn.Linear(2048, 200, bias=False)
+            self.net.fc = nn.Linear(2048, 200)
             self.net.load_state_dict(torch.load(pth_path))
         self.dropout = nn.Dropout(p=0.5)
 
@@ -107,12 +122,12 @@ def attention_object_location_module(conv5_c, conv5_b, image_wh=448, stride=32):
 
     return boxes
 
-
+@timeit
 def iterative_aolm(
     pth_path: str = "saved/resnet50-CUB-200.pth",
     image_dir: str = "cub",
     crop_size: int = 448,
-    focus_size: int = 448
+    focus_size: int = 224
 ) -> None:
 
     from PIL import Image
@@ -130,33 +145,30 @@ def iterative_aolm(
         conv_c, conv_b, _ = net._aolm_forward(x, scda_stage=-1)
         ulx, uly, lrx, lry = attention_object_location_module(conv_c, conv_b, image_wh=crop_size, stride=32)[0]
         focus_w, focus_h = lrx - ulx, lry - uly
-        print(idx, ':', ulx, uly, lrx, lry)
+        # print(idx, ':', ulx, uly, lrx, lry)
         x = to_pil_image(torch.squeeze(x).cpu())
         x = crop(x, ulx, uly, focus_w, focus_h)
-        ratio = focus_w / focus_h
+        # ratio = focus_w / focus_h
 
-        if ratio > 1.:  # keep ratio
-            focus_w = focus_size
-            focus_h = int(focus_size / ratio)
-        elif ratio < 1.:
-            focus_h = focus_size
-            focus_w = int(focus_size * ratio)
-        else:
-            focus_w, focus_h = focus_size, focus_size
-        z = torch.zeros((3, crop_size, crop_size)).cuda()
-        # print(round(ratio, 8), round(focus_w / focus_h, 8), ratio == focus_w / focus_h)
-
+        # if ratio > 1.:  # keep ratio
+        #     focus_w = focus_size
+        #     focus_h = int(focus_size / ratio)
+        # elif ratio < 1.:
+        #     focus_h = focus_size
+        #     focus_w = int(focus_size * ratio)
+        # else:
+        #     focus_w, focus_h = focus_size, focus_size
         x = resize(x, (focus_w, focus_h), interpolation=Image.BILINEAR)
-        x.save(f'cropped/{idx}_.jpg')
-        x.show()
+        # x.save(f'cropped/{idx}_.jpg')
+        # x.show()
 
-
+@timeit
 def tensorized_aolm(
     pth_path: str = "saved/resnet50-CUB-200.pth",
     image_dir: str = "cub",
     crop_size: int = 448,
-    focus_size: int = 448,
-    batch_size: int = 6
+    focus_size: int = 224,
+    batch_size: int = 12
 ) -> None:
 
     from PIL import Image
@@ -181,33 +193,17 @@ def tensorized_aolm(
         conv_c, conv_b, _ = net._aolm_forward(imgs, scda_stage=-1)
         boxes_ = attention_object_location_module(conv_c, conv_b, image_wh=crop_size, stride=32)
         # boxes += boxes_
-        local_imgs = torch.zeros((imgs.size(0), 3, 448, 448)).cuda()
+        local_imgs = torch.zeros((imgs.size(0), 3, focus_size, focus_size)).cuda()
         for i in range(imgs.size(0)):
             ulx, uly, lrx, lry = boxes_[i]
-            local_imgs[i:i + 1] = F.interpolate(imgs[i:i + 1, :, ulx:lrx + 1, uly:lry + 1], size=(448, 448),
-                                                mode='bilinear', align_corners=True)
+            local_imgs[i:i + 1] = F.interpolate(imgs[i:i + 1, :, ulx:lrx + 1, uly:lry + 1],
+                                                size=(focus_size, focus_size), mode='bilinear', align_corners=True)
             t = torch.squeeze(local_imgs[i:i + 1]).cpu()
             t = to_pil_image(t)
             t.show()
-            # print(t.size())
-            # print(idx, ':', ulx, uly, lrx, lry)
-        #     focus_w, focus_h = lrx - ulx, lry - uly
-        #     ratio = focus_w / focus_h
-        #     if ratio > 1.:  # keep ratio
-        #         focus_w = focus_size
-        #         focus_h = int(focus_size / ratio)
-        #     elif ratio < 1.:
-        #         focus_h = focus_size
-        #         focus_w = int(focus_size * ratio)
-        #     else:
-        #         focus_w, focus_h = focus_size, focus_size
-        #     print(img.size())
-        #     img = F.interpolate(img, (focus_w, focus_h), mode='bilinear', align_corners=True)
-        #     print(img.size())
-        # im.save(f'cropped/{idx}_.jpg')
-        # im.show()
+            # t.save(f'cropped/{idx * batch_size + i}_.jpg')
 
 
 if __name__ == "__main__":
-    # iterative_aolm()
+    iterative_aolm()
     tensorized_aolm()
