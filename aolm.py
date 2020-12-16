@@ -16,7 +16,7 @@ class _resnet50(nn.Module):
         else:
             print(f'Load weights from {pth_path}')
             self.net = resnet50(pretrained=False)
-            self.net.fc = nn.Linear(2048, 200)
+            self.net.fc = nn.Linear(2048, 200, bias=False)
             self.net.load_state_dict(torch.load(pth_path))
         self.dropout = nn.Dropout(p=0.5)
 
@@ -78,7 +78,7 @@ def attention_object_location_module(conv5_c, conv5_b, image_wh=448, stride=32):
     a_ = torch.mean(A_, dim=[2, 3], keepdim=True)
     mask_b = (A_ > a_).float()
 
-    coordinates = []
+    boxes = []
     for i, mask in enumerate(mask_c):
         mask = mask.cpu().numpy().reshape(image_wh // stride, image_wh // stride)
         component_labels = measure.label(mask)
@@ -103,27 +103,30 @@ def attention_object_location_module(conv5_c, conv5_b, image_wh=448, stride=32):
         upperleft_x = 0 if upperleft_x < 0 else upperleft_x
         upperleft_y = 0 if upperleft_y < 0 else upperleft_y
 
-        coordinates.append([upperleft_x, upperleft_y, lowerright_x, lowerright_y])
+        boxes.append([upperleft_x, upperleft_y, lowerright_x, lowerright_y])
 
-    return coordinates
+    return boxes
 
 
-if __name__ == "__main__":
-
-    net = _resnet50(pth_path=r"saved/resnet50-CUB-200.pth").cuda()
+def iterative_aolm(
+    pth_path: str = "saved/resnet50-CUB-200.pth",
+    image_dir: str = "cub",
+    crop_size: int = 448,
+    focus_size: int = 448
+) -> None:
 
     from PIL import Image
     from torchvision.transforms.functional import to_tensor, resize, to_pil_image, crop
     import os
 
-    image_dir = 'cub'
-    crop_size = 448
-    focus_size = 448
+    net = _resnet50(pth_path=pth_path).cuda()
     images = [os.path.join(image_dir, p) for p in os.listdir(image_dir)]
+
     for idx, im in enumerate(images):
         x = Image.open(im).convert('RGB')
         x = torch.unsqueeze(to_tensor(resize(x, (crop_size, crop_size))), dim=0).float().cuda()
         if x.size(1) == 1: x = torch.cat((x, x, x), dim=1)
+
         conv_c, conv_b, _ = net._aolm_forward(x, scda_stage=-1)
         ulx, uly, lrx, lry = attention_object_location_module(conv_c, conv_b, image_wh=crop_size, stride=32)[0]
         focus_w, focus_h = lrx - ulx, lry - uly
@@ -131,7 +134,8 @@ if __name__ == "__main__":
         x = to_pil_image(torch.squeeze(x).cpu())
         x = crop(x, ulx, uly, focus_w, focus_h)
         ratio = focus_w / focus_h
-        if ratio > 1.:
+
+        if ratio > 1.:  # keep ratio
             focus_w = focus_size
             focus_h = int(focus_size / ratio)
         elif ratio < 1.:
@@ -139,7 +143,71 @@ if __name__ == "__main__":
             focus_w = int(focus_size * ratio)
         else:
             focus_w, focus_h = focus_size, focus_size
+        z = torch.zeros((3, crop_size, crop_size)).cuda()
         # print(round(ratio, 8), round(focus_w / focus_h, 8), ratio == focus_w / focus_h)
-        x = resize(x, (focus_w, focus_h), interpolation=Image.ANTIALIAS)
+
+        x = resize(x, (focus_w, focus_h), interpolation=Image.BILINEAR)
         x.save(f'cropped/{idx}_.jpg')
         x.show()
+
+
+def tensorized_aolm(
+    pth_path: str = "saved/resnet50-CUB-200.pth",
+    image_dir: str = "cub",
+    crop_size: int = 448,
+    focus_size: int = 448,
+    batch_size: int = 6
+) -> None:
+
+    from PIL import Image
+    from torchvision.transforms.functional import to_tensor, resize, to_pil_image, crop
+    import os
+
+    images = [os.path.join(image_dir, p) for p in os.listdir(image_dir)]
+    batch_, batches = [], []
+    for idx, img in enumerate(images):
+        x = Image.open(img).convert('RGB')
+        x = to_tensor(resize(x, (crop_size, crop_size)))
+        batch_.append(x)
+        if len(batch_) == batch_size or idx == len(images) - 1:
+            batches.append(torch.stack(batch_))
+            batch_ = []
+            # print(batches[-1].size())
+
+    net = _resnet50(pth_path=pth_path).cuda()
+    boxes_, boxes = [], []
+    for idx, imgs in enumerate(batches):
+        imgs = imgs.cuda()
+        conv_c, conv_b, _ = net._aolm_forward(imgs, scda_stage=-1)
+        boxes_ = attention_object_location_module(conv_c, conv_b, image_wh=crop_size, stride=32)
+        # boxes += boxes_
+        local_imgs = torch.zeros((imgs.size(0), 3, 448, 448)).cuda()
+        for i in range(imgs.size(0)):
+            ulx, uly, lrx, lry = boxes_[i]
+            local_imgs[i:i + 1] = F.interpolate(imgs[i:i + 1, :, ulx:lrx + 1, uly:lry + 1], size=(448, 448),
+                                                mode='bilinear', align_corners=True)
+            t = torch.squeeze(local_imgs[i:i + 1]).cpu()
+            t = to_pil_image(t)
+            t.show()
+            # print(t.size())
+            # print(idx, ':', ulx, uly, lrx, lry)
+        #     focus_w, focus_h = lrx - ulx, lry - uly
+        #     ratio = focus_w / focus_h
+        #     if ratio > 1.:  # keep ratio
+        #         focus_w = focus_size
+        #         focus_h = int(focus_size / ratio)
+        #     elif ratio < 1.:
+        #         focus_h = focus_size
+        #         focus_w = int(focus_size * ratio)
+        #     else:
+        #         focus_w, focus_h = focus_size, focus_size
+        #     print(img.size())
+        #     img = F.interpolate(img, (focus_w, focus_h), mode='bilinear', align_corners=True)
+        #     print(img.size())
+        # im.save(f'cropped/{idx}_.jpg')
+        # im.show()
+
+
+if __name__ == "__main__":
+    # iterative_aolm()
+    tensorized_aolm()
