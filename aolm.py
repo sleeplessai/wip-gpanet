@@ -7,21 +7,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from skimage import measure
 
-import time
-
-def timeit(method):
-    def timed(*args, **kw):
-        ts = time.time()
-        result = method(*args, **kw)
-        te = time.time()
-        if 'log_time' in kw:
-            name = kw.get('log_name', method.__name__.upper())
-            kw['log_time'][name] = int((te - ts) * 1000)
-        else:
-            print('%r  %2.2f ms' % (method.__name__, (te - ts) * 1000))
-        return result
-    return timed
-
 
 class _resnet50(nn.Module):
     def __init__(self, pretrained=True, pth_path=None):
@@ -86,11 +71,11 @@ class _resnet50(nn.Module):
 
 def attention_object_location_module(conv5_c, conv5_b, image_wh=448, stride=32):
     A = torch.sum(conv5_c, dim=1, keepdim=True)
-    a = torch.mean(A, dim=[2, 3], keepdim=True)
+    a = torch.mean(A, dim=[2, 3], keepdim=True) * 1.0
     mask_c = (A > a).float()
 
     A_ = torch.sum(conv5_b, dim=1, keepdim=True)
-    a_ = torch.mean(A_, dim=[2, 3], keepdim=True)
+    a_ = torch.mean(A_, dim=[2, 3], keepdim=True) * 1.0
     mask_b = (A_ > a_).float()
 
     boxes = []
@@ -122,7 +107,7 @@ def attention_object_location_module(conv5_c, conv5_b, image_wh=448, stride=32):
 
     return boxes
 
-@timeit
+
 def iterative_aolm(
     pth_path: str = "saved/resnet50-CUB-200.pth",
     image_dir: str = "cub",
@@ -162,7 +147,7 @@ def iterative_aolm(
         # x.save(f'cropped/{idx}_.jpg')
         # x.show()
 
-@timeit
+
 def tensorized_aolm(
     pth_path: str = "saved/resnet50-CUB-200.pth",
     image_dir: str = "cub",
@@ -192,7 +177,7 @@ def tensorized_aolm(
         imgs = imgs.cuda()
         conv_c, conv_b, _ = net._aolm_forward(imgs, scda_stage=-1)
         boxes_ = attention_object_location_module(conv_c, conv_b, image_wh=crop_size, stride=32)
-        # boxes += boxes_
+        boxes += boxes_
         local_imgs = torch.zeros((imgs.size(0), 3, focus_size, focus_size)).cuda()
         for i in range(imgs.size(0)):
             ulx, uly, lrx, lry = boxes_[i]
@@ -200,10 +185,11 @@ def tensorized_aolm(
                                                 size=(focus_size, focus_size), mode='bilinear', align_corners=True)
             t = torch.squeeze(local_imgs[i:i + 1]).cpu()
             t = to_pil_image(t)
-            t.show()
-            # t.save(f'cropped/{idx * batch_size + i}_.jpg')
+            # t.show()
+            t.save(f'cropped/{idx * batch_size + i}_.jpg')
 
+    return boxes
 
 if __name__ == "__main__":
-    iterative_aolm()
-    tensorized_aolm()
+    # iterative_aolm()
+    tensorized_aolm(focus_size=384)

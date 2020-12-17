@@ -49,7 +49,8 @@ class global_perception(nn.Module):
         self.convs = nn.ModuleList()
         for _ in range(n * n):
             # set groups conv to reduce parameters
-            self.convs.append(_conv2d_norm_leaky_relu(n * n * in_channels, in_channels, 3, stride=stride, padding=1, groups=in_channels))
+            self.convs.append(_conv2d_norm_leaky_relu(
+                n * n * in_channels, in_channels, 3, stride=stride, padding=1, groups=in_channels))
 
     def forward(self, x):
         # print(x.size())
@@ -155,7 +156,7 @@ class se_gpm2cls_v0(nn.Module):
 
 
 if __name__ == "__main__":
-    device = torch.device('cuda:0')
+    device = torch.device('cuda')
     x = torch.rand(8, 3, 448, 448).cuda()
     model = se_gpm2cls_v0(
         resnet=_resnet50(),
@@ -164,6 +165,3 @@ if __name__ == "__main__":
         n_classes=200
     ).cuda()
     y = model(x)
-
-    torch.save(model.state_dict(), 'se-gpm2cls-v0_resnet50_3x512d.pth')
-
