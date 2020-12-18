@@ -14,6 +14,8 @@ def _transparent():
 
 
 class _resnet50(nn.Module):
+    _stage_channels = [64, 256, 512, 1024, 2048]
+
     def __init__(self, pretrained=True, pth_path=None):
         super(_resnet50, self).__init__()
         if not pth_path:
@@ -74,10 +76,11 @@ class _resnet50(nn.Module):
         return conv_c, conv_b, embedding
 
 
-class _conv2d_norm_leaky_relu(nn.Module):
-    _negative_slope = np.pi / np.e / 4.
+class _conv2d_norm_relu(nn.Module):
+    _negative_slope = .5 / np.e
+
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=False):
-        super(_conv2d_norm_leaky_relu, self).__init__()
+        super(_conv2d_norm_relu, self).__init__()
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, padding=padding, groups=groups, bias=bias)
         self.norm = nn.BatchNorm2d(out_channels)
         self.relu = nn.LeakyReLU(self._negative_slope, inplace=True)
@@ -96,9 +99,8 @@ class global_perception(nn.Module):
         self.convs = nn.ModuleList()
         for _ in range(n * n):
             # set groups conv to reduce parameters
-            self.convs.append(_conv2d_norm_leaky_relu(
+            self.convs.append(_conv2d_norm_relu(
                 n * n * in_channels, in_channels, 3, stride=stride, padding=1, groups=in_channels))
-            # self.convs.append(nn.Conv2d(n * n * in_channels, in_channels, 3, stride=stride, padding=1, bias=False))
 
     def forward(self, x):
         # destruction: reshaping
@@ -146,7 +148,7 @@ class se_gpm_block(nn.Module):
         self.se_design = se_design
         self.se = se_block(in_channels, se_reduction)
         self.gpm = global_perception(n, in_channels)
-        self.relu = nn.LeakyReLU(_conv2d_norm_leaky_relu._negative_slope, inplace=True)
+        self.relu = nn.LeakyReLU(_conv2d_norm_relu._negative_slope, inplace=True)
 
     def forward(self, x):
         identity = x
@@ -168,28 +170,61 @@ class se_gpm_block(nn.Module):
         return x
 
 
-class scaling_neck(nn.Module):
-    def __init__(self, in_channels=[512, 1024, 2048], out_channels=[512, 512, 512]):
-        super(scaling_neck, self).__init__()
+class scaling_layer(nn.Module):
+    def __init__(self, in_channels=[512, 1024, 2048], out_channels=[512, 512, 512], transparent=False):
+        super(scaling_layer, self).__init__()
         self.scaling = nn.ModuleList()
         for i, o in zip(in_channels, out_channels):
-            self.scaling.append(_conv2d_norm_leaky_relu(i, o, 1))
+            if i == o and transparent:
+                self.scaling.append(_transparent())
+                continue
+            self.scaling.append(_conv2d_norm_relu(i, o, 1))
+        print(self.scaling)
+
+    def forward(self, x: list):
+        scaled_x = []
+        for u, scale in zip(x, self.scaling):
+            scaled_x.append(scale(u))
+        return scaled_x
 
 
 class se_gpm2cls_v1(nn.Module):
-    def __init__(self, resnet, in_stages=[3, 5], in_channels=[512, 512], reduce2=None, gpm_slice=[2], se_design='se', n_classes=0):
+    def __init__(self, resnet, scaling, global_perception, classifer):
         super(se_gpm2cls_v1, self).__init__()
         self.resnet = resnet
-        self.scale = nn.ModuleList()
+        self.scale = scaling_layer()
         self.se_gpm = nn.ModuleList()
         self.fc2cls = nn.ModuleList()
+
+    def forward(self, x):
+        stages = self.resnet(x)
 
 
 if __name__ == "__main__":
     device = torch.device('cuda:0')
+
+    """ gpm """
     # x = torch.arange(144).float().view(1, 1, 12, 12).to(device)
-    x = torch.rand((16, 1024, 12, 12)).to(device)
-    gpm = global_perception(4, 1024).to(device)
-    print(x.size())
-    y = gpm(x)
-    print(y.size())
+    # x = torch.rand((16, 1024, 12, 12)).to(device)
+    # gpm = global_perception(4, 1024).to(device)
+    # print(x.size())
+    # y = gpm(x)
+    # print(y.size())
+
+    """ scaling """
+    # x = [
+    #     torch.rand((16, 512, 48, 48)).cuda(),
+    #     torch.rand((16, 1024, 24, 24)).cuda(),
+    #     torch.rand((16, 2048, 12, 12)).cuda()
+    # ]
+    # scale = scaling_layer(out_channels=[256, 256, 256], transparent=True).cuda()
+    # y = scale(x)
+    # for o in y: print(o.size())
+
+    """ _resnet """
+    # net = _resnet50().cuda()
+    # x = torch.rand((16, 3, 448, 448)).cuda()
+    # y = net(x)
+    # print([a.size() for a in y])
+
+
