@@ -14,8 +14,6 @@ def _transparent():
 
 
 class _resnet50(nn.Module):
-    _stage_channels = [64, 256, 512, 1024, 2048]
-
     def __init__(self, pretrained=True, pth_path=None):
         super(_resnet50, self).__init__()
         if not pth_path:
@@ -26,6 +24,7 @@ class _resnet50(nn.Module):
             self.net.fc = nn.Linear(2048, 200)
             self.net.load_state_dict(torch.load(pth_path))
         self.dropout = nn.Dropout(p=0.5)
+        self.stage_channels = [64, 256, 512, 1024, 2048]
 
     def forward(self, x):
         x = self.net.conv1(x)
@@ -111,14 +110,15 @@ class global_perception(nn.Module):
             xr += q
         xr = torch.cat(xr, 1)
         # construction: restoring
-        t, fr = [], []
-        for conv in self.convs:
-            f = conv(xr)   # f = xr[:, i:(i + 1), :, :]
-            t.append(f)
-            if len(t) == self.n:
-                s = torch.cat(t, -1)
-                t = []
-                fr.append(s)
+        q, fr = [], []
+        for i, conv in enumerate(self.convs):
+            f = conv(xr)
+            # f = xr[:, i:(i + 1), :, :]
+            q.append(f)
+            if len(q) == self.n:
+                p = torch.cat(q, -1)
+                q = []
+                fr.append(p)
         x = torch.cat(fr, -2)
         return x
 
@@ -189,24 +189,37 @@ class scaling_layer(nn.Module):
 
 
 class se_gpm2cls_v1(nn.Module):
-    def __init__(self, resnet, scaling, global_perception, classifer):
+    def __init__(
+        self,
+        backbone,
+        backbone_out_stages,
+        scaling,
+        scaling_out_feats,
+        global_perception,
+        global_perception_out_feats,
+        classifer,
+        classifer_num_classes
+    ):
         super(se_gpm2cls_v1, self).__init__()
-        self.resnet = resnet
+        self.backbone = backbone
         self.scale = scaling_layer()
         self.se_gpm = nn.ModuleList()
         self.fc2cls = nn.ModuleList()
 
     def forward(self, x):
-        stages = self.resnet(x)
+        features = self.backbone(x)
 
 
 if __name__ == "__main__":
+    torch.backends.cudnn.enabled = True
+    torch.backends.cudnn.benchmark = False
     device = torch.device('cuda:0')
+    torch.cuda.empty_cache()
 
     """ gpm """
     # x = torch.arange(144).float().view(1, 1, 12, 12).to(device)
-    # x = torch.rand((16, 1024, 12, 12)).to(device)
-    # gpm = global_perception(4, 1024).to(device)
+    # x = torch.rand((2, 1, 6, 6)).to(device)
+    # gpm = global_perception(3, 1).to(device)
     # print(x.size())
     # y = gpm(x)
     # print(y.size())
