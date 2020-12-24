@@ -9,10 +9,6 @@ import numpy as np
 from aolm import attention_object_location_module
 
 
-def _transparent():
-    return nn.Identity()
-
-
 class _resnet50(nn.Module):
     def __init__(self, pretrained=True, pth_path=None):
         super(_resnet50, self).__init__()
@@ -24,7 +20,10 @@ class _resnet50(nn.Module):
             self.net.fc = nn.Linear(2048, 200)
             self.net.load_state_dict(torch.load(pth_path))
         self.dropout = nn.Dropout(p=0.5)
-        self.stage_channels = [64, 256, 512, 1024, 2048]
+
+    @property
+    def out_channels_per_stage(self):
+        return [64, 256, 512, 1024, 2048]
 
     def forward(self, x):
         x = self.net.conv1(x)
@@ -39,30 +38,33 @@ class _resnet50(nn.Module):
 
         return [x1, x2, x3, x4, x5]
 
-    def _aolm_forward(self, x, scda_stage=4):
-        scda = [None, None, None, None, None]
+    def _aolm_forward(self, x, scda_stage=-1):
+        scda = [None]
 
         x = self.net.conv1(x)
         x = self.net.bn1(x)
         x = self.net.relu(x)
         x = self.net.maxpool(x)     # s1
 
-        x = self.net.layer1(x)      # s2
+        conv2_b = self.net.layer1[:-1](x)
+        x = self.net.layer1[-1](conv2_b)
+        conv2_c = x
+        scda.append((conv2_c, conv2_b))    # s2
 
         conv3_b = self.net.layer2[:-1](x)
         x = self.net.layer2[-1](conv3_b)
         conv3_c = x
-        scda[2] = (conv3_c, conv3_b)    # s3
+        scda.append((conv3_c, conv3_b))    # s3
 
         conv4_b = self.net.layer3[:-1](x)
         x = self.net.layer3[-1](conv4_b)
         conv4_c = x
-        scda[3] = (conv4_c, conv4_b)    # s4
+        scda.append((conv4_c, conv4_b))    # s4
 
         conv5_b = self.net.layer4[:2](x)
         x = self.net.layer4[2](conv5_b)
         conv5_c = x
-        scda[4] = (conv5_c, conv5_b)    # s5
+        scda.append((conv5_c, conv5_b))    # s5
 
         x = self.net.avgpool(x)
         x = x.view(x.size(0), -1)
@@ -75,8 +77,12 @@ class _resnet50(nn.Module):
         return conv_c, conv_b, embedding
 
 
+def _transparent():
+    return nn.Identity()
+
+
 class _conv2d_norm_relu(nn.Module):
-    _negative_slope = .5 / np.e
+    _negative_slope = 0.5 / np.e     # 0.18393972058572117
 
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=False):
         super(_conv2d_norm_relu, self).__init__()
@@ -141,9 +147,9 @@ class se_block(nn.Module):
         return x * y.expand_as(x)
 
 
-class se_gpm_block(nn.Module):
+class gpa_block(nn.Module):
     def __init__(self, in_channels, n, se_design='se', se_reduction=16):
-        super(se_gpm_block, self).__init__()
+        super(gpa_block, self).__init__()
         assert se_design in ['se', 'pre', 'post', 'identity']
         self.se_design = se_design
         self.se = se_block(in_channels, se_reduction)
@@ -172,6 +178,7 @@ class se_gpm_block(nn.Module):
 
 class scaling_layer(nn.Module):
     def __init__(self, in_channels=[512, 1024, 2048], out_channels=[512, 512, 512], transparent=False):
+        assert len(in_channels) == len(out_channels)
         super(scaling_layer, self).__init__()
         self.scaling = nn.ModuleList()
         for i, o in zip(in_channels, out_channels):
@@ -179,7 +186,7 @@ class scaling_layer(nn.Module):
                 self.scaling.append(_transparent())
                 continue
             self.scaling.append(_conv2d_norm_relu(i, o, 1))
-        print(self.scaling)
+        # print(self.scaling)
 
     def forward(self, x: list):
         scaled_x = []
@@ -188,26 +195,46 @@ class scaling_layer(nn.Module):
         return scaled_x
 
 
-class se_gpm2cls_v1(nn.Module):
-    def __init__(
-        self,
-        backbone,
-        backbone_out_stages,
-        scaling,
-        scaling_out_feats,
-        global_perception,
-        global_perception_out_feats,
-        classifer,
-        classifer_num_classes
-    ):
-        super(se_gpm2cls_v1, self).__init__()
-        self.backbone = backbone
-        self.scale = scaling_layer()
-        self.se_gpm = nn.ModuleList()
-        self.fc2cls = nn.ModuleList()
+class gpa_layer(nn.Module):
+    def __init__(self, in_channels=[512, 512, 512], split_sizes=[2, 2, 2], se_designs=['se', 'se', 'se'], transparent=True):
+        assert len(in_channels) == len(split_sizes) == len(se_designs)
+        super(gpa_layer, self).__init__()
+        self.gpa = nn.ModuleList()
+        for i, n, d in zip(in_channels, split_sizes, se_designs):
+            if n == 1 and transparent:
+                self.gpa.append(_transparent())
+                continue
+            self.gpa.append(gpa_block(i, n, d))
+        # print(self.gpa)
 
     def forward(self, x):
-        features = self.backbone(x)
+        global_x = []
+        for u, gpm in zip(x, self.gpa):
+            global_x.append(gpm(u))
+        return global_x
+
+
+class fc_layer(nn.Module):
+    def __init__(self, in_features=[2048], out_features=0):
+        super(fc_layer, self).__init__()
+        self.fc = nn.ModuleList()
+        for i in in_features:
+            self.fc.append(nn.Linear(i, out_features, bias=False))
+        # print(self.fc)
+
+    def forward(self, x):
+        logits = []
+        for u, fc in zip(x, self.fc):
+            logits.append(fc(u))
+        return logits
+
+
+class gpa2cls_v1(nn.Module):
+    # TODO: accomplish v1 when components are ready
+
+    def __init__(self): super(gpa2cls_v1, self).__init__()
+
+    def forward(self, x): pass
 
 
 if __name__ == "__main__":
@@ -216,28 +243,37 @@ if __name__ == "__main__":
     device = torch.device('cuda:0')
     torch.cuda.empty_cache()
 
-    """ gpm """
+    """ single gpm """
     # x = torch.arange(144).float().view(1, 1, 12, 12).to(device)
-    # x = torch.rand((2, 1, 6, 6)).to(device)
+    # x = torch.rand((8, 1, 6, 6)).to(device)
     # gpm = global_perception(3, 1).to(device)
     # print(x.size())
     # y = gpm(x)
     # print(y.size())
 
     """ scaling """
-    # x = [
-    #     torch.rand((16, 512, 48, 48)).cuda(),
-    #     torch.rand((16, 1024, 24, 24)).cuda(),
-    #     torch.rand((16, 2048, 12, 12)).cuda()
-    # ]
-    # scale = scaling_layer(out_channels=[256, 256, 256], transparent=True).cuda()
-    # y = scale(x)
-    # for o in y: print(o.size())
+    x = [
+        torch.rand((16, 512, 48, 48)).cuda(),
+        # torch.rand((16, 1024, 24, 24)).cuda(),
+        torch.rand((16, 2048, 12, 12)).cuda()
+    ]
+    scale = scaling_layer(in_channels=[512, 2048] ,out_channels=[512, 512], transparent=True).cuda()
+    x = scale(x)
+    for o in x: print(o.size())
+
+    """ se-gpm layer """
+    gpa = gpa_layer(in_channels=[512, 512], split_sizes=[1, 2], se_designs=['se', 'se']).cuda()
+    x = gpa(x)
+
+    """ fully-connected layer """
+    x = [F.adaptive_max_pool2d(u, 1).view(u.size(0), -1) for u in x]
+    fc = fc_layer(in_features=[512, 512], out_features=100).cuda()
+    x = fc(x)
+    for o in x: print(o.size())
 
     """ _resnet """
-    # net = _resnet50().cuda()
+    net = _resnet50().cuda()
     # x = torch.rand((16, 3, 448, 448)).cuda()
     # y = net(x)
     # print([a.size() for a in y])
-
-
+    print(net.out_channels_per_stage)

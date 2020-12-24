@@ -11,47 +11,31 @@ from fireblast.experiment.loop import Loop
 from torch.utils.tensorboard import SummaryWriter
 
 
+def build_model():
+  pass  # TODO: model preparation
+
+
 if __name__ == "__main__":
-  print(torch.backends.cudnn.enabled)
   torch.cuda.empty_cache()
 
   device_id = 'cuda'
-  epoch_cnt = 100
+  epoch_cnt = 60
   expt = Experiment()
-  default_cub200(expt, data_loc='/home/mlss/data/CUB_200_2011', loader=True)
-  # default_cars196(expt, data_loc='/home/mlss/data/cars196', loader=False)
-  # default_aircraft(expt, data_loc='/home/mlss/data/fgvc-aircraft-2013b', trainval=True, loader=False)
-  # expt.trainset_loader = default_dataloader(expt.trainset, batch_size=12)
-  # expt.testset_loader = default_dataloader(expt.testset, batch_size=6, shuffle=False)
+  default_cub200(expt, data_loc='/workspace/data/CUB_200_2011', loader=True)
+  default_cars196(expt, data_loc='/workspace/data/cars196', loader=False)
+  default_aircraft(expt, data_loc='/workspace/data/fgvc-aircraft-2013b', trainval=True, loader=False)
 
-  # exit(0)   # uncomment this to check dataset
-
-  # from ablation import ABLATION_MODELS
-  # from segp2cls_v0 import _resnet50
-  from zigzagjig import zigzag
-
-  # model = ABLATION_MODELS['0b'](
-  #   resnet=_resnet50(),
-  #   reduce2=[2048],
-  #   n_classes=expt.category_cnt
-  # )
-  model = zigzag(class_cnt=expt.category_cnt)
-  model_id = model._id
+  exit(0)   # uncomment this to check dataset
+  # model
+  model, model_id = build_model()
 
   # optimizer
   sgdm_lr = np.pi / np.e / 100.  # 0.0115~
-  # sgdm_lrs = [sgdm_lr * .1, sgdm_lr, sgdm_lr, sgdm_lr, sgdm_lr]
   schd_t, schd_d, schd_r = 20, 10, .5
   sgdm = optim.SGD(model.parameters(), lr=sgdm_lr, momentum=0.9, weight_decay=1e-4)
-  # sgdm = optim.SGD([
-  #   {'params': model.backbone.parameters(), 'lr': sgdm_lr * .1},
-  #   {'params': model.scale.parameters(), 'lr': sgdm_lr},
-  #   {'params': model.se_gpm.parameters(), 'lr': sgdm_lr},
-  #   {'params': model.fc2cls.parameters(), 'lr': sgdm_lr}
-  # ], momentum=0.9, weight_decay=1e-4) # for backbone + module framework
   schd = optim.lr_scheduler.CosineAnnealingLR(sgdm, T_max=schd_t + schd_d)
 
-  # tensorboard log
+  # tensorboard logger
   smry_wrt = SummaryWriter(comment=f'-{model_id}-{expt.expt_id}')
   best_acc, best_epoch = .0, 0
   for e in range(epoch_cnt):
@@ -61,12 +45,9 @@ if __name__ == "__main__":
       #   sgdm.param_groups[nlr]['initial_lr'] = sgdm_lrs[nlr] * (schd_r ** (e // schd_t))
       sgdm.param_groups[0]['initial_lr'] = sgdm_lr * (schd_r ** (e // schd_t))
       schd = optim.lr_scheduler.CosineAnnealingLR(sgdm, T_max=schd_t + schd_d)
-    # smry_wrt.add_scalars('Training/LR/epoch', {'backbone_lr': sgdm.param_groups[0]['lr'], 'module_lr':sgdm.param_groups[1]['lr']}, e)
     smry_wrt.add_scalar('Training/LR/epoch', sgdm.param_groups[0]['lr'], e)
 
-    model.training = True
     Loop.learn(expt, model, sgdm, schd, F.cross_entropy, 0, device_id, e, smry_wrt)
-    model.training = False
     _, accuracy = Loop.validate(expt, model, F.cross_entropy, 0, device_id, e, smry_wrt)
 
     # saving

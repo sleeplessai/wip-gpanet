@@ -33,30 +33,33 @@ class _resnet50(nn.Module):
 
         return [x1, x2, x3, x4, x5]
 
-    def _aolm_forward(self, x, scda_stage=4):
-        scda = [None, None, None, None, None]
+    def _aolm_forward(self, x, scda_stage=-1):
+        scda = [None]
 
         x = self.net.conv1(x)
         x = self.net.bn1(x)
         x = self.net.relu(x)
         x = self.net.maxpool(x)     # s1
 
-        x = self.net.layer1(x)      # s2
+        conv2_b = self.net.layer1[:-1](x)
+        x = self.net.layer1[-1](conv2_b)
+        conv2_c = x
+        scda.append((conv2_c, conv2_b))    # s2
 
         conv3_b = self.net.layer2[:-1](x)
         x = self.net.layer2[-1](conv3_b)
         conv3_c = x
-        scda[2] = (conv3_c, conv3_b)    # s3
+        scda.append((conv3_c, conv3_b))    # s3
 
         conv4_b = self.net.layer3[:-1](x)
         x = self.net.layer3[-1](conv4_b)
         conv4_c = x
-        scda[3] = (conv4_c, conv4_b)    # s4
+        scda.append((conv4_c, conv4_b))    # s4
 
         conv5_b = self.net.layer4[:2](x)
         x = self.net.layer4[2](conv5_b)
         conv5_c = x
-        scda[4] = (conv5_c, conv5_b)    # s5
+        scda.append((conv5_c, conv5_b))    # s5
 
         x = self.net.avgpool(x)
         x = x.view(x.size(0), -1)
@@ -94,7 +97,7 @@ def attention_object_location_module(conv5_c, conv5_b, image_wh=448, stride=32):
         prop = measure.regionprops(intersection.astype(int))
         if len(prop) == 0:
             bbox = [0, 0, image_wh // stride, image_wh // stride]
-            print('there is one img no intersection')
+            print("There is an image no mask intersection")
         else:
             bbox = prop[0].bbox
 
