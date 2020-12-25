@@ -6,79 +6,77 @@ try:
 except:
     from torchvision.models import resnet50, resnet18
 import numpy as np
-from aolm import attention_object_location_module
+from skimage import measure
 
 
-class _resnet50(nn.Module):
-    def __init__(self, pretrained=True, pth_path=None):
-        super(_resnet50, self).__init__()
-        if not pth_path:
+### Utility modules ###
+
+class _backbone(nn.Module):
+    def __init__(self, pretrained=True, pretrained_file=None, num_classes=0):
+        super(_backbone, self).__init__()
+        if not pretrained_file:
             self.net = resnet50(pretrained=True)
-        else:
-            print(f'Load weights from {pth_path}')
+        elif pretrained_file and num_classes:
+            print(f'Load weights from {pretrained_file}')
             self.net = resnet50(pretrained=False)
-            self.net.fc = nn.Linear(2048, 200)
-            self.net.load_state_dict(torch.load(pth_path))
-        self.dropout = nn.Dropout(p=0.5)
+            self.net.fc = nn.Linear(2048, num_classes)
+            self.net.load_state_dict(torch.load(pretrained_file))
+        self.dropout5 = nn.Dropout(p=0.5)
 
     @property
     def out_channels_per_stage(self):
         return [64, 256, 512, 1024, 2048]
 
-    def forward(self, x):
-        x = self.net.conv1(x)
-        x = self.net.bn1(x)
-        x = self.net.relu(x)
-
-        x1 = self.net.maxpool(x)
-        x2 = self.net.layer1(x1)
-        x3 = self.net.layer2(x2)
-        x4 = self.net.layer3(x3)
-        x5 = self.net.layer4(x4)
-
-        return [x1, x2, x3, x4, x5]
-
-    def _aolm_forward(self, x, scda_stage=-1):
+    def forward(self, x, scda_stage=-1, multistage=False):
         scda = [None]
 
         x = self.net.conv1(x)
         x = self.net.bn1(x)
         x = self.net.relu(x)
-        x = self.net.maxpool(x)     # s1
+        x1 = self.net.maxpool(x)             # stage 1
 
-        conv2_b = self.net.layer1[:-1](x)
-        x = self.net.layer1[-1](conv2_b)
-        conv2_c = x
-        scda.append((conv2_c, conv2_b))    # s2
+        conv2_b = self.net.layer1[:-1](x1)
+        x2 = self.net.layer1[-1](conv2_b)    # stage 2
+        conv2_c = x2
+        scda.append((conv2_c, conv2_b))
 
-        conv3_b = self.net.layer2[:-1](x)
-        x = self.net.layer2[-1](conv3_b)
-        conv3_c = x
-        scda.append((conv3_c, conv3_b))    # s3
+        conv3_b = self.net.layer2[:-1](x2)
+        x3 = self.net.layer2[-1](conv3_b)    # stage 3
+        conv3_c = x3
+        scda.append((conv3_c, conv3_b))
 
-        conv4_b = self.net.layer3[:-1](x)
-        x = self.net.layer3[-1](conv4_b)
-        conv4_c = x
-        scda.append((conv4_c, conv4_b))    # s4
+        conv4_b = self.net.layer3[:-1](x3)
+        x4 = self.net.layer3[-1](conv4_b)    # stage 4
+        conv4_c = x4
+        scda.append((conv4_c, conv4_b))
 
-        conv5_b = self.net.layer4[:2](x)
-        x = self.net.layer4[2](conv5_b)
-        conv5_c = x
-        scda.append((conv5_c, conv5_b))    # s5
+        conv5_b = self.net.layer4[:-1](x4)
+        x5 = self.net.layer4[-1](conv5_b)    # stage 5
+        conv5_c = x5
+        scda.append((conv5_c, conv5_b))
 
-        x = self.net.avgpool(x)
+        x = self.net.avgpool(x5)
         x = x.view(x.size(0), -1)
-        x = self.dropout(x)
-        embedding = x
+        x = self.dropout5(x)
+        repr_x5 = x
 
         conv_c, conv_b = scda[scda_stage]
         # conv5_c from last conv layer, \
         # conv5_b is the one in front of conv5_c
-        return conv_c, conv_b, embedding
+        if not multistage: return conv_c, conv_b, repr_x5
+        return [x1, x2, x3, x4, x5]
 
 
 def _transparent():
     return nn.Identity()
+
+
+def _dense_layer(in_features, out_features, bias=False):
+    return nn.Linear(in_features, out_features, bias)
+
+
+def _dropout(p=0.5):
+    return nn.Dropout(p=p, inplace=True)
 
 
 class _conv2d_norm_relu(nn.Module):
@@ -95,6 +93,55 @@ class _conv2d_norm_relu(nn.Module):
         x = self.norm(x)
         if activate: x = self.relu(x)
         return x
+
+
+### Basic components/blocks for GPA2Cls-v1 ###
+
+class focal_locator:
+    def __init__(self, size: int = 448, stride: int = 32, focal_size: int = 384):
+        self.size = size
+        self.stride = stride
+        self.focal_size = focal_size
+
+    def _attention_object_location_module(self, conv5_c, conv5_b, image_wh=448, stride=32):
+        A = torch.sum(conv5_c, dim=1, keepdim=True)
+        a = torch.mean(A, dim=[2, 3], keepdim=True) * 1.0
+        mask_c = (A > a).float()
+        A_ = torch.sum(conv5_b, dim=1, keepdim=True)
+        a_ = torch.mean(A_, dim=[2, 3], keepdim=True) * 1.0
+        mask_b = (A_ > a_).float()
+
+        boxes = []
+        for i, mask in enumerate(mask_c):
+            mask = mask.cpu().numpy().reshape(image_wh // stride, image_wh // stride)
+            component_labels = measure.label(mask)
+            properties = measure.regionprops(component_labels)
+            areas = []
+            for prop in properties:
+                areas.append(prop.area)
+            max_idx = areas.index(max(areas))
+            intersection = ((component_labels == (max_idx + 1)).astype(int) +
+                            (mask_b[i][0].cpu().numpy() == 1).astype(int)) == 2
+            prop = measure.regionprops(intersection.astype(int))
+            if len(prop) == 0:
+                bbox = [0, 0, image_wh // stride, image_wh // stride]
+            else:
+                bbox = prop[0].bbox
+            upperleft_x, upperleft_y = bbox[0] * stride - 1, bbox[1] * stride - 1
+            lowerright_x, lowerright_y = bbox[2] * stride - 1, bbox[3] * stride - 1
+            upperleft_x = 0 if upperleft_x < 0 else upperleft_x
+            upperleft_y = 0 if upperleft_y < 0 else upperleft_y
+            boxes.append([upperleft_x, upperleft_y, lowerright_x, lowerright_y])
+        return boxes
+
+    def locate(self, image_batch, conv_c, conv_b):
+        boxes = self._attention_object_location_module(conv_c.detach(), conv_b.detach(), self.size, self.stride)
+        focus = torch.zeros((image_batch.size(0), 3, self.focal_size, self.focal_size)).cuda()
+        for i in range(image_batch.size(0)):
+            ulx, uly, lrx, lry = boxes[i]
+            focus[i:i + 1] = F.interpolate(image_batch[i:i + 1, :, ulx:lrx + 1, uly:lry + 1],
+                                           size=(self.focal_size, self.focal_size), mode='bilinear', align_corners=True)
+        return focus
 
 
 class global_perception(nn.Module):
@@ -176,6 +223,8 @@ class gpa_block(nn.Module):
         return x
 
 
+### Main layers for GPA2Cls-v1 ###
+
 class scaling_layer(nn.Module):
     def __init__(self, in_channels=[512, 1024, 2048], out_channels=[512, 512, 512], transparent=False):
         assert len(in_channels) == len(out_channels)
@@ -189,9 +238,7 @@ class scaling_layer(nn.Module):
         # print(self.scaling)
 
     def forward(self, x: list):
-        scaled_x = []
-        for u, scale in zip(x, self.scaling):
-            scaled_x.append(scale(u))
+        scaled_x = [scale(u) for u, scale in zip(x, self.scaling)]
         return scaled_x
 
 
@@ -208,33 +255,114 @@ class gpa_layer(nn.Module):
         # print(self.gpa)
 
     def forward(self, x):
-        global_x = []
-        for u, gpm in zip(x, self.gpa):
-            global_x.append(gpm(u))
+        global_x = [gpm(u) for u, gpm in zip(x, self.gpa)]
         return global_x
 
 
-class fc_layer(nn.Module):
-    def __init__(self, in_features=[2048], out_features=0):
-        super(fc_layer, self).__init__()
+class classifier(nn.Module):
+    def __init__(self, in_features=[512, 512, 512], num_classes=0, pooling=F.adaptive_max_pool2d, dropout=True):
+        super(classifier, self).__init__()
+        self.dropout = nn.ModuleList() if dropout else None
         self.fc = nn.ModuleList()
         for i in in_features:
-            self.fc.append(nn.Linear(i, out_features, bias=False))
+            self.fc.append(_dense_layer(i, num_classes))
+            if dropout:
+                self.dropout.append(_dropout())
+        self.pooling = pooling
+        # print(self.dropout)
         # print(self.fc)
 
     def forward(self, x):
-        logits = []
-        for u, fc in zip(x, self.fc):
-            logits.append(fc(u))
+        repr_x = [self.pooling(o, 1).view(o.size(0), -1) for o in x]    # pooling and flatten
+        if self.dropout:
+            repr_x = [drop(o) for o, drop in zip(repr_x, self.dropout)]
+        logits = [clas(e) for e, clas in zip(repr_x, self.fc)]
         return logits
 
 
+### TODO: GPA2Cls-v1 definition ###
+
 class gpa2cls_v1(nn.Module):
-    # TODO: accomplish v1 when components are ready
+    def __init__(
+        self,
+        *,
+        backbone: nn.Module = None,
+        locator: focal_locator = None,
+        scaling: nn.Module = None,
+        global_per_attn: nn.Module = None,
+        classifier: nn.Module = None
+    ):
+        super(gpa2cls_v1, self).__init__()
+        self.backbone = backbone
+        self.scaling = scaling
+        self.global_per_attn = global_per_attn
 
-    def __init__(self): super(gpa2cls_v1, self).__init__()
+    def forward(self, x_batch):
+        x = self.backbone(x_batch)
+        x = self.scaling(x)
+        x = self.global_per_attn(x)
 
-    def forward(self, x): pass
+
+### Components tests ###
+
+def _component_ready():
+    print(""" *single gpm """)
+    x = torch.arange(144).float().view(1, 1, 12, 12).to(device)
+    gpm = global_perception(3, 1).to(device)
+    print(x.size())
+    y = gpm(x)
+    print(y.size())
+    print()
+
+    print(""" *backbone """)
+    net = _backbone().cuda()
+    print(net.out_channels_per_stage)
+
+    x = torch.rand((16, 3, 448, 448)).cuda()
+    a, b, c = net.forward(x)
+    print(a.size(), b.size(), c.size())
+
+    x = torch.rand((16, 3, 384, 384)).cuda()
+    y = net.forward(x, multistage=True)
+    print([a.size() for a in y])
+    print()
+
+    print(""" *focal_locator """)
+    x = torch.rand((16, 3, 448, 448)).cuda()
+    x1 = torch.rand((16, 2048, 14, 14)).cuda()
+    x2 = torch.rand((16, 2048, 14, 14)).cuda()
+    fl = focal_locator()
+    b = fl.locate(x, x1, x2)
+    b.requires_grad = True
+    print(b.size(), b.requires_grad)
+    print()
+
+    print(""" *scaling """)
+    x = [
+        torch.rand((16, 512, 48, 48)).cuda(),
+        # torch.rand((16, 1024, 24, 24)).cuda(),
+        torch.rand((16, 2048, 12, 12)).cuda()
+    ]
+    scale = scaling_layer(in_channels=[512, 2048] ,out_channels=[512, 512], transparent=True).cuda()
+    print(scale)
+    x = scale(x)
+    for o in x: print(o.size())
+    print()
+
+    print(""" *global_per_attn layer """)
+    gpa = gpa_layer(in_channels=[512, 512], split_sizes=[4, 1], se_designs=['se', 'se']).cuda()
+    print(gpa)
+    x = gpa(x)
+    print()
+
+    print(""" *fully-connected layer """)
+    for o in x: print(o.size())
+    clz = classifier(in_features=[512, 512], num_classes=196, dropout=True).cuda()
+    print(clz)
+    x = clz(x)
+    for o in x: print(o.size())
+    print()
+
 
 
 if __name__ == "__main__":
@@ -243,37 +371,4 @@ if __name__ == "__main__":
     device = torch.device('cuda:0')
     torch.cuda.empty_cache()
 
-    """ single gpm """
-    # x = torch.arange(144).float().view(1, 1, 12, 12).to(device)
-    # x = torch.rand((8, 1, 6, 6)).to(device)
-    # gpm = global_perception(3, 1).to(device)
-    # print(x.size())
-    # y = gpm(x)
-    # print(y.size())
-
-    """ scaling """
-    x = [
-        torch.rand((16, 512, 48, 48)).cuda(),
-        # torch.rand((16, 1024, 24, 24)).cuda(),
-        torch.rand((16, 2048, 12, 12)).cuda()
-    ]
-    scale = scaling_layer(in_channels=[512, 2048] ,out_channels=[512, 512], transparent=True).cuda()
-    x = scale(x)
-    for o in x: print(o.size())
-
-    """ se-gpm layer """
-    gpa = gpa_layer(in_channels=[512, 512], split_sizes=[1, 2], se_designs=['se', 'se']).cuda()
-    x = gpa(x)
-
-    """ fully-connected layer """
-    x = [F.adaptive_max_pool2d(u, 1).view(u.size(0), -1) for u in x]
-    fc = fc_layer(in_features=[512, 512], out_features=100).cuda()
-    x = fc(x)
-    for o in x: print(o.size())
-
-    """ _resnet """
-    net = _resnet50().cuda()
-    # x = torch.rand((16, 3, 448, 448)).cuda()
-    # y = net(x)
-    # print([a.size() for a in y])
-    print(net.out_channels_per_stage)
+    _component_ready()
