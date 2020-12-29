@@ -141,6 +141,7 @@ runs/
 fireblast/
 
 # wip assets
+datasets/
 cropped/
 cub/
 cub.zip

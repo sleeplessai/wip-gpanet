@@ -15,13 +15,13 @@ class _backbone(nn.Module):
     def __init__(self, pretrained=True, pretrained_file=None, num_classes=0):
         super(_backbone, self).__init__()
         if not pretrained_file:
-            self.net = resnet50(pretrained=True)
+            self.net = resnet50(pretrained=pretrained)
         elif pretrained_file and num_classes:
             print(f'Load weights from {pretrained_file}')
             self.net = resnet50(pretrained=False)
             self.net.fc = nn.Linear(2048, num_classes)
             self.net.load_state_dict(torch.load(pretrained_file))
-        self.dropout5 = nn.Dropout(p=0.5)
+        # self.dropout5 = nn.Dropout(p=0.5)
 
     @property
     def out_channels_per_stage(self):
@@ -55,15 +55,15 @@ class _backbone(nn.Module):
         conv5_c = x5
         scda.append((conv5_c, conv5_b))
 
-        x = self.net.avgpool(x5)
-        x = x.view(x.size(0), -1)
-        x = self.dropout5(x)
-        repr_x5 = x
+        # x = self.net.avgpool(x5)
+        # x = x.view(x.size(0), -1)
+        # x = self.dropout5(x)
+        # repr_x5 = x
 
         conv_c, conv_b = scda[scda_stage]
         # conv5_c from last conv layer, \
         # conv5_b is the one in front of conv5_c
-        if not multistage: return conv_c, conv_b, repr_x5
+        if not multistage: return conv_c, conv_b, x5
         return [x1, x2, x3, x4, x5]
 
 
@@ -280,27 +280,69 @@ class classifier(nn.Module):
         return logits
 
 
-### TODO: GPA2Cls-v1 definition ###
+### GPA2Cls-v1 definition ###
 
 class gpa2cls_v1(nn.Module):
-    def __init__(
-        self,
-        *,
-        backbone: nn.Module = None,
-        locator: focal_locator = None,
-        scaling: nn.Module = None,
-        global_per_attn: nn.Module = None,
-        classifier: nn.Module = None
-    ):
+    def __init__(self, cfg_file: str = None):
         super(gpa2cls_v1, self).__init__()
-        self.backbone = backbone
-        self.scaling = scaling
-        self.global_per_attn = global_per_attn
+        self.backbone, self.stages = _transparent(), None
+        self.locator, self.scaling, self.gp_attn = None, _transparent(), _transparent()
+        self.cls1, self.cls2 = _transparent(), _transparent()
+        self.cfg_node = self._model_from_cfg(cfg_file)
+
+    def _model_from_cfg(self, cfg):
+        from config import get_cfg_defaults
+        _c = get_cfg_defaults()
+        _c.merge_from_file(cfg)
+        _c.freeze()
+
+        self.backbone = _backbone(
+            pretrained=_c.BACKBONE.PRETRAINED,
+            pretrained_file=_c.BACKBONE.PRETRAINED_FILE
+        )
+        self.stages = np.array(_c.BACKBONE.STAGES, dtype=np.bool)
+        self.locator = focal_locator(
+            size=_c.FOCAL_LOCATOR.SIZE,
+            stride=_c.FOCAL_LOCATOR.STRIDE,
+            focal_size=_c.FOCAL_LOCATOR.FOCAL_SIZE
+        )
+        self.scaling = scaling_layer(
+            in_channels=_c.SCALING_LAYER.IN_CHANNELS,
+            out_channels=_c.SCALING_LAYER.OUT_CHANNELS,
+            transparent=_c.SCALING_LAYER.TRANSPARENT
+        )
+        self.gp_attn = gpa_layer(
+            in_channels=_c.GLOBAL_PERCEPTION_ATTN_LAYER.IN_CHANNELS,
+            split_sizes=_c.GLOBAL_PERCEPTION_ATTN_LAYER.SPLIT_SIZES,
+            se_designs=_c.GLOBAL_PERCEPTION_ATTN_LAYER.SE_DESIGNS,
+            transparent=_c.GLOBAL_PERCEPTION_ATTN_LAYER.TRANSPARENT
+        )
+
+        _pooling_ops = {
+            None: None,
+            'avg': F.adaptive_avg_pool2d,
+            'max': F.adaptive_max_pool2d
+        }
+        self.kls = classifier(
+            in_features=_c.CLASSIFIER.IN_FEATURES,
+            num_classes=_c.CLASSIFIER.NUM_CLASSES,
+            pooling=_pooling_ops[_c.CLASSIFIER.POOLING],
+            dropout=_c.CLASSIFIER.DROPOUT
+        )
+        return _c
 
     def forward(self, x_batch):
-        x = self.backbone(x_batch)
-        x = self.scaling(x)
-        x = self.global_per_attn(x)
+        x5c, x5b, x5 = self.backbone(x_batch)
+        x_local = self.locator.locate(x_batch, x5c, x5b)
+
+        x_feats = np.array(self.backbone(x_local, multistage=True))[self.stages].tolist()
+        x_feats = self.scaling(x_feats)
+        for i in range(len(x_feats) - 1):
+            x_feats[i] = F.adaptive_max_pool2d(x_feats[i], x_feats[-1].size(-1))
+        x_feats = torch.cat(x_feats, dim=1)
+        x_feats = self.gp_attn([x_feats])[0]
+
+        return self.kls([x5, x_feats])
 
 
 ### Components tests ###
@@ -319,22 +361,19 @@ def _component_ready():
     print(net.out_channels_per_stage)
 
     x = torch.rand((16, 3, 448, 448)).cuda()
-    a, b, c = net.forward(x)
-    print(a.size(), b.size(), c.size())
+    x1, x2, xe = net.forward(x)
+    print(x1.size(), x1.size(), xe.size())
 
     x = torch.rand((16, 3, 384, 384)).cuda()
     y = net.forward(x, multistage=True)
-    print([a.size() for a in y])
+    print([o.size() for o in y])
     print()
 
     print(""" *focal_locator """)
     x = torch.rand((16, 3, 448, 448)).cuda()
-    x1 = torch.rand((16, 2048, 14, 14)).cuda()
-    x2 = torch.rand((16, 2048, 14, 14)).cuda()
     fl = focal_locator()
-    b = fl.locate(x, x1, x2)
-    b.requires_grad = True
-    print(b.size(), b.requires_grad)
+    y = fl.locate(x, x1, x2)
+    print(y.size(), y.requires_grad)
     print()
 
     print(""" *scaling """)
@@ -350,7 +389,7 @@ def _component_ready():
     print()
 
     print(""" *global_per_attn layer """)
-    gpa = gpa_layer(in_channels=[512, 512], split_sizes=[4, 1], se_designs=['se', 'se']).cuda()
+    gpa = gpa_layer(in_channels=[512, 512], split_sizes=[1, 1], se_designs=['se', 'se']).cuda()
     print(gpa)
     x = gpa(x)
     print()
@@ -364,11 +403,20 @@ def _component_ready():
     print()
 
 
+def _modeling_ready():
+    cfg = "gpa2cls-v1.yaml"
+    model = gpa2cls_v1(cfg_file=cfg).cuda()
+    torch.save(model.state_dict(), 'gpa2clsv1-null.pth')
+    batch = torch.rand((16, 3, 448, 448)).cuda()
+    result = model(batch)
+
 
 if __name__ == "__main__":
     torch.backends.cudnn.enabled = True
-    torch.backends.cudnn.benchmark = False
-    device = torch.device('cuda:0')
+    torch.backends.cudnn.benchmark = True
+    device = torch.device('cuda')
     torch.cuda.empty_cache()
 
-    _component_ready()
+    # _component_ready()
+    _modeling_ready()
+

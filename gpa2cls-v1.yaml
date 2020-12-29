@@ -1,0 +1,35 @@
+MODEL:
+  NAME: "GPA2Cls-V1"
+  INTRO: "SEGPM2Cls-V0b w/ FocalLocator"
+
+BACKBONE:
+  NAME: "ResNet-50"
+  PRETRAINED: True
+  PRETRAINED_FILE: None
+  STAGES: [0, 0, 1, 0, 1]
+
+FOCAL_LOCATOR:
+  NAME: "FocalLocator"
+  SIZE: 448
+  STRIDE: 32
+  FOCAL_SIZE: 384
+
+SCALING_LAYER:
+  NAME: "ScalingLayer"
+  IN_CHANNELS: [512, 2048]
+  OUT_CHANNELS: [512, 512]
+  TRANSPARENT: True
+
+GLOBAL_PERCEPTION_ATTN_LAYER:
+  NAME: "GlobalPerceptionAttentionLayer"
+  IN_CHANNELS: [1024]
+  SPLIT_SIZES: [2]
+  SE_DESIGNS: ['se']
+  TRANSPARENT: False
+
+CLASSIFIER:
+  NAME: "Classifier"
+  IN_FEATURES: [2048, 1024]
+  NUM_CLASSES: 200
+  POOLING: 'avg'
+  DROPOUT: True
