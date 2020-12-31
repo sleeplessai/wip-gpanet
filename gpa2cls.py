@@ -327,7 +327,7 @@ class gpa2cls_v1(nn.Module):
             'avg': F.adaptive_avg_pool2d,
             'max': F.adaptive_max_pool2d
         }
-        self.kls = classifier(
+        self.clf = classifier(
             in_features=_c.CLASSIFIER.IN_FEATURES,
             num_classes=_c.CLASSIFIER.NUM_CLASSES,
             pooling=_pooling_ops[_c.CLASSIFIER.POOLING],
@@ -337,16 +337,16 @@ class gpa2cls_v1(nn.Module):
 
     def forward(self, x_batch):
         x5c, x5b, x5 = self.backbone(x_batch)
-        x_local = self.locator.locate(x_batch, x5c, x5b)
+        x_focal = self.locator.locate(x_batch, x5c, x5b)
 
-        x_feats = np.array(self.backbone(x_local, multistage=True))[self.stages].tolist()
+        x_feats = np.array(self.backbone(x_focal, multistage=True))[self.stages].tolist()
         x_feats = self.scaling(x_feats)
         for i in range(len(x_feats) - 1):
             x_feats[i] = F.adaptive_max_pool2d(x_feats[i], x_feats[-1].size(-1))
         x_feats = torch.cat(x_feats, dim=1)
         x_feats = self.gp_attn([x_feats])[0]
 
-        return self.kls([x5, x_feats])
+        return self.clf([x5, x_feats])
 
 
 ### Components tests ###
