@@ -1,5 +1,6 @@
 MODEL:
   NAME: "GPA2Cls-V1"
+  ID: "gpa2cls-v1-r50-1024d2x2"
   INTRO: "SEGPM2Cls-V0b w/ FocalLocator"
 
 BACKBONE:

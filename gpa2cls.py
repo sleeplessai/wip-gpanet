@@ -283,19 +283,23 @@ class classifier(nn.Module):
 ### GPA2Cls-v1 definition ###
 
 class gpa2cls_v1(nn.Module):
-    def __init__(self, cfg_file: str = None):
+    def __init__(self, cfg_file: str = None, num_classes: int = None):
         super(gpa2cls_v1, self).__init__()
+        self.model_id = ""
         self.backbone, self.stages = _transparent(), None
-        self.locator, self.scaling, self.gp_attn = None, _transparent(), _transparent()
+        self.locator = None
+        self.scaling, self.gp_attn = _transparent(), _transparent()
         self.cls1, self.cls2 = _transparent(), _transparent()
-        self.cfg_node = self._model_from_cfg(cfg_file)
+        self.cfg_node = self._model_from_cfg(cfg_file, num_classes)
 
-    def _model_from_cfg(self, cfg):
+    def _model_from_cfg(self, cfg, n_cls):
         from config import get_cfg_defaults
         _c = get_cfg_defaults()
         _c.merge_from_file(cfg)
+        if n_cls: _c.CLASSIFIER.NUM_CLASSES = n_cls
         _c.freeze()
 
+        self.model_id = _c.MODEL.ID
         self.backbone = _backbone(
             pretrained=_c.BACKBONE.PRETRAINED,
             pretrained_file=_c.BACKBONE.PRETRAINED_FILE
@@ -417,6 +421,6 @@ if __name__ == "__main__":
     device = torch.device('cuda')
     torch.cuda.empty_cache()
 
-    # _component_ready()
+    _component_ready()
     _modeling_ready()
 

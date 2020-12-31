@@ -4,8 +4,9 @@ _C = CN()
 
 # Model info for GPA2Cls v1
 _C.MODEL = CN()
-_C.MODEL.NAME = "GPA2Cls-V1-Base"
-_C.MODEL.INTRO = "The next for SEGPM2Cls-V0b"
+_C.MODEL.NAME = "GPA2Cls-V1"
+_C.MODEL.ID = "gpa2cls-v1-uninitialized"
+_C.MODEL.INTRO = "Evolution of SEGPM2Cls-V0b"
 
 # Backbone Network
 _C.BACKBONE = CN()
