@@ -260,7 +260,7 @@ class gpa_layer(nn.Module):
 
 
 class classifier(nn.Module):
-    def __init__(self, in_features=[512, 512, 512], num_classes=0, pooling=F.adaptive_max_pool2d, dropout=True):
+    def __init__(self, in_features=[512, 512, 512], num_classes=0, pooling=None, dropout=True):
         super(classifier, self).__init__()
         self.dropout = nn.ModuleList() if dropout else None
         self.fc = nn.ModuleList()
@@ -273,7 +273,9 @@ class classifier(nn.Module):
         # print(self.fc)
 
     def forward(self, x):
-        repr_x = [self.pooling(o, 1).view(o.size(0), -1) for o in x]    # pooling and flatten
+        repr_x = x
+        if self.pooling:
+            repr_x = [self.pooling(o, 1).view(o.size(0), -1) for o in x]    # pooling and flatten
         if self.dropout:
             repr_x = [drop(o) for o, drop in zip(repr_x, self.dropout)]
         logits = [clas(e) for e, clas in zip(repr_x, self.fc)]
@@ -285,11 +287,7 @@ class classifier(nn.Module):
 class gpa2cls_v1(nn.Module):
     def __init__(self, cfg_file: str = None, num_classes: int = None):
         super(gpa2cls_v1, self).__init__()
-        self.model_id = ""
-        self.backbone, self.stages = _transparent(), None
-        self.locator = None
-        self.scaling, self.gp_attn = _transparent(), _transparent()
-        self.cls1, self.cls2 = _transparent(), _transparent()
+        self.model_id = "gpa2cls_v1_initialized"
         self.cfg_node = self._model_from_cfg(cfg_file, num_classes)
 
     def _model_from_cfg(self, cfg, n_cls):
@@ -335,18 +333,8 @@ class gpa2cls_v1(nn.Module):
         )
         return _c
 
-    def forward(self, x_batch):
-        x5c, x5b, x5 = self.backbone(x_batch)
-        x_focal = self.locator.locate(x_batch, x5c, x5b)
-
-        x_feats = np.array(self.backbone(x_focal, multistage=True))[self.stages].tolist()
-        x_feats = self.scaling(x_feats)
-        for i in range(len(x_feats) - 1):
-            x_feats[i] = F.adaptive_max_pool2d(x_feats[i], x_feats[-1].size(-1))
-        x_feats = torch.cat(x_feats, dim=1)
-        x_feats = self.gp_attn([x_feats])[0]
-
-        return self.clf([x5, x_feats])
+    def forward(self):
+        raise NotImplementedError
 
 
 ### Components tests ###
@@ -408,11 +396,14 @@ def _component_ready():
 
 
 def _modeling_ready():
-    cfg = "gpa2cls-v1.yaml"
+    print(""" *modeling gpa2cls w/ configs """)
+    cfg = "configs/gpa2cls-v1.yaml"
     model = gpa2cls_v1(cfg_file=cfg).cuda()
+    print(model.cfg_node)
     torch.save(model.state_dict(), 'gpa2clsv1-null.pth')
     batch = torch.rand((16, 3, 448, 448)).cuda()
     result = model(batch)
+    print()
 
 
 if __name__ == "__main__":
