@@ -26,7 +26,6 @@ class gpa2cls_v1a(gpa2cls_v1):
 class gpa2cls_v1b(gpa2cls_v1):
     def __init__(self, cfg_file, num_classes):
         super(gpa2cls_v1b, self).__init__(cfg_file, num_classes)
-        print(self.clf)
 
     def forward(self, x_batch):
         x5c, x5b, x5 = self.backbone(x_batch)
@@ -44,10 +43,12 @@ class gpa2cls_v1b(gpa2cls_v1):
 
 if __name__ == "__main__":
     # net = gpa2cls_v1a('configs/gpa2cls-v1-r50-1024d2x2.yaml', num_classes=200).cuda()
-    net = gpa2cls_v1b('configs/gpa2cls-v1-r50-mg442-1536d.yaml', num_classes=200).cuda()
+    # net = gpa2cls_v1b('configs/gpa2cls-v1-r50-mg442-1536d.yaml', num_classes=200).cuda()
+    net = gpa2cls_v1a('configs/gpa2cls-v1-r50-2560d2x2.yaml', num_classes=200).cuda()
+
     print(net.cfg_node)
     print(net.model_id)
     torch.save(net.state_dict(), 'gpa2clsv1-null.pth')
-    x = torch.rand((16, 3, 448, 448)).cuda()
+    x = torch.rand((12, 3, 448, 448)).cuda()
     y = net(x)
 
