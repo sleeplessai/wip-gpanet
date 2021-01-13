@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from gpa2cls import gpa2cls_v1
 
 
@@ -42,13 +43,18 @@ class gpa2cls_v1b(gpa2cls_v1):
 
 
 if __name__ == "__main__":
-    # net = gpa2cls_v1a('configs/gpa2cls-v1-r50-1024d2x2.yaml', num_classes=200).cuda()
-    # net = gpa2cls_v1b('configs/gpa2cls-v1-r50-mg442-1536d.yaml', num_classes=200).cuda()
-    net = gpa2cls_v1a('configs/gpa2cls-v1-r50-2560d2x2.yaml', num_classes=200).cuda()
+    # net = gpa2cls_v1a('configs/gpa2cls-v1-r50-ms35-1024d2x2.yaml', num_classes=200)
+    # net = gpa2cls_v1b('configs/gpa2cls-v1-r50-mg442-1536d.yaml', num_classes=200)
+    # net = gpa2cls_v1a('configs/gpa2cls-v1-r50-ms35-2560d2x2.yaml', num_classes=200)
+    # net = gpa2cls_v1b('configs/gpa2cls-v1-r50-mg222-1536d.yaml', num_classes=200)
+    # net = gpa2cls_v1a('configs/gpa2cls-v1-r50-3072d2x2.yaml', num_classes=200)
+    net = gpa2cls_v1a('configs/gpa2cls-v1-r50-ms45-3072d2x2.yaml', num_classes=200)
 
+    print(net)
     print(net.cfg_node)
     print(net.model_id)
-    torch.save(net.state_dict(), 'gpa2clsv1-null.pth')
-    x = torch.rand((12, 3, 448, 448)).cuda()
-    y = net(x)
+    # net = net.cuda()
+    # torch.save(net.state_dict(), 'gpa2clsv1-null.pth')
+    # x = torch.rand((12, 3, 448, 448)).cuda()
+    # y = net(x)
 

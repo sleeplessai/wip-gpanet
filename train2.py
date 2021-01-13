@@ -7,9 +7,9 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-from fireblast.experiment.experiment import Experiment, set_cuda_visible_devices
-from fireblast.experiment.default import default_cub200, default_cars196, default_aircraft
-from fireblast.experiment.loop import Loop
+from fireblast.experiment import Experiment, set_cuda_visible_devices
+from fireblast.experiment import default_cub200, default_cars196, default_aircraft
+from fireblast.experiment import Loop
 
 from modeling import gpa2cls_v1a, gpa2cls_v1b
 
@@ -19,10 +19,10 @@ if __name__ == "__main__":
     expt2 = Experiment()
 
     default_cub200(expt2, 'datasets/CUB_200_2011', True, batch_size=(12, 6))
-    # default_cars196(expt2, 'datasets/cars196', True)
-    # default_aircraft(expt2, 'datasets/fgvc-aircraft-2013b', True, True)
+    # default_cars196(expt2, 'datasets/cars196', True, batch_size=(12, 6))
+    # default_aircraft(expt2, 'datasets/fgvc-aircraft-2013b', True, True, batch_size=(12, 6, 6))
 
-    model2 = gpa2cls_v1a('configs/gpa2cls-v1-r50-2560d2x2.yaml', num_classes=expt2.category_cnt).cuda()
+    model2 = gpa2cls_v1a('configs/gpa2cls-v1-r50-ms45-3072d2x2.yaml', num_classes=expt2.category_cnt).cuda()
     logging.warning(model2.model_id)
 
     max_epochs = 80

@@ -6,7 +6,7 @@ _C = CN()
 _C.MODEL = CN()
 _C.MODEL.NAME = "GPA2Cls-V1"
 _C.MODEL.ID = "gpa2cls-v1-uninitialized"
-_C.MODEL.INTRO = "Evolution of SEGPM2Cls-V0b"
+_C.MODEL.INTRO = "gpa2cls-v1-introduction"
 
 # Backbone Network
 _C.BACKBONE = CN()
@@ -40,7 +40,7 @@ _C.GLOBAL_PERCEPTION_ATTN_LAYER.TRANSPARENT = True
 
 # Classifier
 _C.CLASSIFIER = CN()
-_C.CLASSIFIER.NAME = "CLASSIFIER"
+_C.CLASSIFIER.NAME = "CLF"
 _C.CLASSIFIER.IN_FEATURES = None
 _C.CLASSIFIER.NUM_CLASSES = 0
 _C.CLASSIFIER.POOLING = None

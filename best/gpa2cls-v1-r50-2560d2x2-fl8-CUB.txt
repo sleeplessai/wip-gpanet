@@ -1,0 +1,1 @@
+best_accuracy: 86.537798% @ epoch: 76
