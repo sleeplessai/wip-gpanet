@@ -42,17 +42,29 @@ class gpa2cls_v1b(gpa2cls_v1):
         return self.clf([x5, xg])
 
 
+class gpa2cls_v1_fl2(gpa2cls_v1):
+    def __init__(self, cfg_file, num_classes):
+        super(gpa2cls_v1_fl2, self).__init__(cfg_file, num_classes)
+
+    def forward(self, x_batch):
+        x5c, x5b, _ = self.backbone(x_batch)
+        x_focal = self.locator.locate2(x_batch, x5c, x5b)
+        return x_focal
+
+
 if __name__ == "__main__":
     # net = gpa2cls_v1a('configs/gpa2cls-v1-r50-ms35-1024d2x2.yaml', num_classes=200)
     # net = gpa2cls_v1b('configs/gpa2cls-v1-r50-mg442-1536d.yaml', num_classes=200)
     # net = gpa2cls_v1a('configs/gpa2cls-v1-r50-ms35-2560d2x2.yaml', num_classes=200)
     # net = gpa2cls_v1b('configs/gpa2cls-v1-r50-mg222-1536d.yaml', num_classes=200)
     # net = gpa2cls_v1a('configs/gpa2cls-v1-r50-3072d2x2.yaml', num_classes=200)
-    net = gpa2cls_v1a('configs/gpa2cls-v1-r50-ms45-3072d2x2.yaml', num_classes=200)
+    # net = gpa2cls_v1a('configs/gpa2cls-v1-r50-ms45-3072d2x2.yaml', num_classes=200)
+    net = gpa2cls_v1_fl2('configs/gpa2cls-v1-r50-fl2.yaml', num_classes=200)    # fl2
 
     print(net)
-    print(net.cfg_node)
     print(net.model_id)
+    print(net.cfg_node)
+
     # net = net.cuda()
     # torch.save(net.state_dict(), 'gpa2clsv1-null.pth')
     # x = torch.rand((12, 3, 448, 448)).cuda()

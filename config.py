@@ -21,7 +21,8 @@ _C.FOCAL_LOCATOR = CN()
 _C.FOCAL_LOCATOR.NAME = "FL"
 _C.FOCAL_LOCATOR.SIZE = 448
 _C.FOCAL_LOCATOR.STRIDE = 1
-_C.FOCAL_LOCATOR.FOCAL_SIZE = 448
+# FL2 lets focal_size accept a list of multi-resolution
+_C.FOCAL_LOCATOR.FOCAL_SIZE = None
 
 # Scaling Layer
 _C.SCALING_LAYER = CN()

@@ -1,26 +1,34 @@
+import logging
+
+import numpy as np
+from PIL import Image
+from skimage import measure
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.transforms.functional as TF
+
 try:
-    from fireblast.models.resnet import resnet50, resnet18
+    from fireblast.models.resnet import resnet50
 except:
-    from torchvision.models import resnet50, resnet18
-import numpy as np
-from skimage import measure
+    from torchvision.models import resnet50
 
 
 ### Utility modules ###
 
 class _backbone(nn.Module):
-    def __init__(self, pretrained=True, pretrained_file=None, num_classes=0):
+    def __init__(self, pretrained=True, pretrained_file=None, num_classes=0):   # TODO: add more backbone
         super(_backbone, self).__init__()
         if not pretrained_file:
             self.net = resnet50(pretrained=pretrained)
-        elif pretrained_file and num_classes:
-            print(f'Load weights from {pretrained_file}')
+        elif pretrained_file and num_classes > 0:
+            logging.warning(f'Load weights from {pretrained_file}')
             self.net = resnet50(pretrained=False)
             self.net.fc = nn.Linear(2048, num_classes)
             self.net.load_state_dict(torch.load(pretrained_file))
+        else:
+            logging.warning(f'Backbone not loaded')
         # self.dropout5 = nn.Dropout(p=0.5)
 
     @property
@@ -103,12 +111,12 @@ class focal_locator:
         self.stride = stride
         self.focal_size = focal_size
 
-    def _attention_object_location_module(self, conv5_c, conv5_b, image_wh=448, stride=32):
+    def _get_bbox(self, conv5_c, conv5_b, image_wh=448, stride=32):
         A = torch.sum(conv5_c, dim=1, keepdim=True)
-        a = torch.mean(A, dim=[2, 3], keepdim=True) * 1.0
+        a = torch.mean(A, dim=[2, 3], keepdim=True)
         mask_c = (A > a).float()
         A_ = torch.sum(conv5_b, dim=1, keepdim=True)
-        a_ = torch.mean(A_, dim=[2, 3], keepdim=True) * 1.0
+        a_ = torch.mean(A_, dim=[2, 3], keepdim=True)
         mask_b = (A_ > a_).float()
 
         boxes = []
@@ -127,20 +135,43 @@ class focal_locator:
                 bbox = [0, 0, image_wh // stride, image_wh // stride]
             else:
                 bbox = prop[0].bbox
-            upperleft_x, upperleft_y = bbox[0] * stride - 1, bbox[1] * stride - 1
-            lowerright_x, lowerright_y = bbox[2] * stride - 1, bbox[3] * stride - 1
-            upperleft_x = 0 if upperleft_x < 0 else upperleft_x
-            upperleft_y = 0 if upperleft_y < 0 else upperleft_y
-            boxes.append([upperleft_x, upperleft_y, lowerright_x, lowerright_y])
+
+            x_ul, y_ul = bbox[0] * stride - 1, bbox[1] * stride - 1
+            x_lr, y_lr = bbox[2] * stride - 1, bbox[3] * stride - 1
+            x_ul = 0 if x_ul < 0 else x_ul
+            y_ul = 0 if y_ul < 0 else y_ul
+
+            boxes.append([x_ul, y_ul, x_lr, y_lr])
+
         return boxes
 
     def locate(self, image_batch, conv_c, conv_b):
-        boxes = self._attention_object_location_module(conv_c.detach(), conv_b.detach(), self.size, self.stride)
+        boxes = self._get_bbox(conv_c.detach(), conv_b.detach(), self.size, self.stride)
         focus = torch.zeros((image_batch.size(0), 3, self.focal_size, self.focal_size)).cuda()
         for i in range(image_batch.size(0)):
             ulx, uly, lrx, lry = boxes[i]
             focus[i:i + 1] = F.interpolate(image_batch[i:i + 1, :, ulx:lrx + 1, uly:lry + 1],
                                            size=(self.focal_size, self.focal_size), mode='bilinear', align_corners=True)
+        return focus
+
+    def locate2(self, image_batch, conv_c, conv_b):
+        assert isinstance(self.focal_size, list) and len(self.focal_size) >= 2
+
+        boxes = self._get_bbox(conv_c.detach(), conv_b.detach(), self.size, self.stride)
+
+        _fsz_idx = torch.multinomial(torch.ones_like(torch.tensor(self.focal_size)).float(), 1)
+        focal_size = self.focal_size[_fsz_idx]
+
+        focus = torch.zeros((image_batch.size(0), 3, focal_size, focal_size)).cuda()
+        for i in range(image_batch.size(0)):
+            ulx, uly, lrx, lry = boxes[i]
+            focus[i:i + 1] = TF.to_tensor(
+                TF.resize(TF.to_pil_image(image_batch[i:i + 1, :, ulx:lrx + 1, uly:lry + 1].squeeze()),
+                          size=(focal_size, focal_size), interpolation=Image.LANCZOS)
+            )
+            # TODO: Cut-and-Paste
+            # focus[i:i + 1, :, focal_size - (lrx - ulx):focal_size, focal_size - (lry - uly):focal_size] = image_batch[i:i + 1, :, ulx:lrx + 1, uly:lry + 1]
+            # focus[i:i + 1, :, 0:lrx - ulx + 1, 0:lry - uly + 1] = image_batch[i:i + 1, :, ulx:lrx + 1, uly:lry + 1]
         return focus
 
 
@@ -285,7 +316,7 @@ class classifier(nn.Module):
 ### GPA2Cls-v1 definition ###
 
 class gpa2cls_v1(nn.Module):
-    def __init__(self, cfg_file: str = None, num_classes: int = None):
+    def __init__(self, cfg_file: str, num_classes: int):
         super(gpa2cls_v1, self).__init__()
         self.model_id = "gpa2cls_v1_initialized"
         self.cfg_node = self._model_from_cfg(cfg_file, num_classes)
@@ -300,7 +331,8 @@ class gpa2cls_v1(nn.Module):
         self.model_id = _c.MODEL.ID
         self.backbone = _backbone(
             pretrained=_c.BACKBONE.PRETRAINED,
-            pretrained_file=_c.BACKBONE.PRETRAINED_FILE
+            pretrained_file=_c.BACKBONE.PRETRAINED_FILE,
+            num_classes=_c.CLASSIFIER.NUM_CLASSES
         )
         self.stages = np.array(_c.BACKBONE.STAGES, dtype=np.bool)
         self.locator = focal_locator(
