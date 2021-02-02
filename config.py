@@ -11,6 +11,7 @@ _C.MODEL.INTRO = "gpa2cls-v1-introduction"
 # Backbone Network
 _C.BACKBONE = CN()
 _C.BACKBONE.NAME = "BACKBONE"
+_C.BACKBONE.MODEL_TYPE = None
 # Path or type for backbone network pretrained weights
 _C.BACKBONE.PRETRAINED = False
 _C.BACKBONE.PRETRAINED_FILE = None

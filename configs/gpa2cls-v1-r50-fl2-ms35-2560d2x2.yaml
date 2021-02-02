@@ -5,6 +5,7 @@ MODEL:
 
 BACKBONE:
   NAME: "ResNet-50"
+  MODEL_TYPE: "r50"
   PRETRAINED: True
   PRETRAINED_FILE: None
   STAGES: [0, 0, 1, 0, 1]
@@ -13,7 +14,7 @@ FOCAL_LOCATOR:
   NAME: "FocalLocator2"
   SIZE: 448
   STRIDE: 32
-  FOCAL_SIZE: [256, 320, 384, 448]
+  FOCAL_SIZE: [256, 320, 384]
 
 SCALING_LAYER:
   NAME: "ScalingLayer"
@@ -25,12 +26,12 @@ GLOBAL_PERCEPTION_ATTN_LAYER:
   NAME: "GlobalPerceptionAttentionLayer"
   IN_CHANNELS: [2560]
   SPLIT_SIZES: [2]
-  SE_DESIGNS: ['se']
+  SE_DESIGNS: ["se"]
   TRANSPARENT: True
 
 CLASSIFIER:
   NAME: "Classifier"
   IN_FEATURES: [2048, 2560]
   NUM_CLASSES: 200
-  POOLING: 'avg'
+  POOLING: "avg"
   DROPOUT: True

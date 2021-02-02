@@ -10,26 +10,44 @@ import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 
 try:
-    from fireblast.models.resnet import resnet50
+    from fireblast.models.resnet import resnet50, resnext50_32x4d
 except:
-    from torchvision.models import resnet50
+    from torchvision.models import resnet50, resnext50_32x4d
 
 
 ### Utility modules ###
 
+def _transparent():
+    return nn.Identity()
+
+
+def _dense_layer(in_features, out_features, bias=False):
+    return nn.Linear(in_features, out_features, bias)
+
+
+def _dropout(p=0.5):
+    return nn.Dropout(p=p, inplace=True)
+
+
 class _backbone(nn.Module):
-    def __init__(self, pretrained=True, pretrained_file=None, num_classes=0):   # TODO: add more backbone
+    _zoo = {
+        None: _transparent(),
+        'r50': resnet50,
+        'x50': resnext50_32x4d
+    }
+
+    def __init__(self, model_type, pretrained=True, pretrained_file=None, num_classes=0):
         super(_backbone, self).__init__()
+        resnet = self._zoo[model_type]
         if not pretrained_file:
-            self.net = resnet50(pretrained=pretrained)
+            self.net = resnet(pretrained=pretrained)
         elif pretrained_file and num_classes > 0:
             logging.warning(f'Load weights from {pretrained_file}')
-            self.net = resnet50(pretrained=False)
-            self.net.fc = nn.Linear(2048, num_classes)
+            self.net = resnet(pretrained=False)
+            self.net.fc = _dense_layer(2048, num_classes)
             self.net.load_state_dict(torch.load(pretrained_file))
         else:
             logging.warning(f'Backbone not loaded')
-        # self.dropout5 = nn.Dropout(p=0.5)
 
     @property
     def out_channels_per_stage(self):
@@ -63,28 +81,11 @@ class _backbone(nn.Module):
         conv5_c = x5
         scda.append((conv5_c, conv5_b))
 
-        # x = self.net.avgpool(x5)
-        # x = x.view(x.size(0), -1)
-        # x = self.dropout5(x)
-        # repr_x5 = x
-
         conv_c, conv_b = scda[scda_stage]
         # conv5_c from last conv layer, \
         # conv5_b is the one in front of conv5_c
         if not multistage: return conv_c, conv_b, x5
         return [x1, x2, x3, x4, x5]
-
-
-def _transparent():
-    return nn.Identity()
-
-
-def _dense_layer(in_features, out_features, bias=False):
-    return nn.Linear(in_features, out_features, bias)
-
-
-def _dropout(p=0.5):
-    return nn.Dropout(p=p, inplace=True)
 
 
 class _conv2d_norm_relu(nn.Module):
@@ -152,26 +153,6 @@ class focal_locator:
             ulx, uly, lrx, lry = boxes[i]
             focus[i:i + 1] = F.interpolate(image_batch[i:i + 1, :, ulx:lrx + 1, uly:lry + 1],
                                            size=(self.focal_size, self.focal_size), mode='bilinear', align_corners=True)
-        return focus
-
-    def locate2(self, image_batch, conv_c, conv_b):
-        assert isinstance(self.focal_size, list) and len(self.focal_size) >= 2
-
-        boxes = self._get_bbox(conv_c.detach(), conv_b.detach(), self.size, self.stride)
-
-        _fsz_idx = torch.multinomial(torch.ones_like(torch.tensor(self.focal_size)).float(), 1)
-        focal_size = self.focal_size[_fsz_idx]
-
-        focus = torch.zeros((image_batch.size(0), 3, focal_size, focal_size)).cuda()
-        for i in range(image_batch.size(0)):
-            ulx, uly, lrx, lry = boxes[i]
-            focus[i:i + 1] = TF.to_tensor(
-                TF.resize(TF.to_pil_image(image_batch[i:i + 1, :, ulx:lrx + 1, uly:lry + 1].squeeze()),
-                          size=(focal_size, focal_size), interpolation=Image.LANCZOS)
-            )
-            # TODO: Cut-and-Paste
-            # focus[i:i + 1, :, focal_size - (lrx - ulx):focal_size, focal_size - (lry - uly):focal_size] = image_batch[i:i + 1, :, ulx:lrx + 1, uly:lry + 1]
-            # focus[i:i + 1, :, 0:lrx - ulx + 1, 0:lry - uly + 1] = image_batch[i:i + 1, :, ulx:lrx + 1, uly:lry + 1]
         return focus
 
 
@@ -330,6 +311,7 @@ class gpa2cls_v1(nn.Module):
 
         self.model_id = _c.MODEL.ID
         self.backbone = _backbone(
+            model_type=_c.BACKBONE.MODEL_TYPE,
             pretrained=_c.BACKBONE.PRETRAINED,
             pretrained_file=_c.BACKBONE.PRETRAINED_FILE,
             num_classes=_c.CLASSIFIER.NUM_CLASSES
