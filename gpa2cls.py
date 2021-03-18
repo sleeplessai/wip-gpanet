@@ -113,6 +113,8 @@ class focal_locator:
         self.focal_size = focal_size
 
     def _get_bbox(self, conv5_c, conv5_b, image_wh=448, stride=32):
+        '''Refer to https://github.com/ZF4444/MMAL-Net/blob/master/utils/AOLM.py'''
+
         A = torch.sum(conv5_c, dim=1, keepdim=True)
         a = torch.mean(A, dim=[2, 3], keepdim=True)
         mask_c = (A > a).float()
@@ -125,9 +127,7 @@ class focal_locator:
             mask = mask.cpu().numpy().reshape(image_wh // stride, image_wh // stride)
             component_labels = measure.label(mask)
             properties = measure.regionprops(component_labels)
-            areas = []
-            for prop in properties:
-                areas.append(prop.area)
+            areas = [prop.area for prop in properties]
             max_idx = areas.index(max(areas))
             intersection = ((component_labels == (max_idx + 1)).astype(int) +
                             (mask_b[i][0].cpu().numpy() == 1).astype(int)) == 2
